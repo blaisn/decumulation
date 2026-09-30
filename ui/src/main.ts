@@ -191,6 +191,9 @@ inputs.addEventListener("input", (e) => {
   if (!path) return;
   setPath(form, path, el instanceof HTMLInputElement && el.type === "checkbox" ? el.checked : el.value);
   persist(); markStale();
+  // Le montant à 65 ans, laissé vide, affiche le montant annuel : le suivre quand on le modifie.
+  const pa = /^(spouses\.\d\.pensions\.\d+)\.amount$/.exec(path);
+  if (pa) formBody.querySelector(`[data-path="${pa[1]}.amountAt65"]`)?.setAttribute("placeholder", el.value);
   const m = /^spouses\.(\d)\.name$/.exec(path);
   if (m) {
     const t = inputs.querySelector(`[data-title="${m[1]}"]`);

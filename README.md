@@ -44,6 +44,7 @@ Lancez d'abord `npm install` et gardez le `package-lock.json` qu'il crée : la C
 
 ## Hypothèses actuelles
 - À 65 ans et plus, les retraits du REER sont traités comme des revenus de FERR (admissibles au crédit de pension et au fractionnement)
+- Harmonisation RRQ à 65 ans (case à cocher par rente) : le « Montant annuel » s'applique avant 65 ans, le « Montant de la pension à 65 ans » à partir de 65 ans (`amountAt65` dans le moteur); laissé vide, il est identique au montant annuel. Les deux montants sont en dollars de l'année de départ et indexés de la même façon. La rente de survivant est calculée sur le montant que touchait le défunt à son âge au décès
 - Rentes RPA admissibles au fractionnement à tout âge; RRQ et PSV ne le sont pas
 - Fractionnement optimisé chaque année (0 à 50 %, pas de 1 %), tant que les deux conjoints sont en vie. Case à cocher « Appliquer le fractionnement du revenu de pension » dans les Hypothèses avancées (cochée par défaut); `assumptions.pensionSplitting` dans le moteur
 - Québec : montants en raison de l'âge, pour personne vivant seule et pour revenus de retraite (1,25 x le revenu, max 3 541 $) mis en commun et réduits une seule fois selon le revenu familial net; montant personnel inutilisé transférable

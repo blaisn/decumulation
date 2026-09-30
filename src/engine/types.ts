@@ -34,6 +34,11 @@ export interface DbPension {
   startAge: number;
   indexation: number; // ex. 0.02
   survivorPct: number; // % de la rente versé au survivant (TODO: décès)
+  /**
+   * Harmonisation avec la RRQ : montant annuel à partir de 65 ans, en $ de startYear (comme `annualAmount`, indexé depuis startYear).
+   * `annualAmount` s'applique avant 65 ans. Absent : la rente ne change pas à 65 ans.
+   */
+  amountAt65?: number;
 }
 
 export interface PublicBenefit {

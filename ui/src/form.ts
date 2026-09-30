@@ -18,11 +18,16 @@ function pensionRows(sp: SpouseForm, i: number): string {
     const base = `spouses.${i}.pensions.${j}`;
     return `<div class="pension"><div class="grid pgrid">
       ${textField("Nom de la rente", `${base}.label`, p.label, { wide: true })}
-      ${field("Montant annuel", `${base}.amount`, p.amount, { suffix: "$" })}
+      ${field("Montant annuel", `${base}.amount`, p.amount, { suffix: "$", hint: p.harmonization ? "Avant 65 ans" : undefined })}
       ${field("Début à", `${base}.startAge`, p.startAge, { suffix: "ans" })}
       ${field("Indexation", `${base}.indexation`, p.indexation, { suffix: "%" })}
       ${field("Versée au survivant", `${base}.survivorPct`, p.survivorPct, { suffix: "%" })}
-    </div><button type="button" class="link danger" data-action="remove-pension" data-spouse="${i}" data-index="${j}">Retirer cette rente</button></div>`;
+    </div>
+    <div class="grid pgrid harm">
+      <label class="check wide"><input type="checkbox" data-path="${base}.harmonization" data-rerender="1"${p.harmonization ? " checked" : ""}><span>Harmonisation RRQ à 65 ans</span></label>
+      ${p.harmonization ? field("Montant de la pension à 65 ans", `${base}.amountAt65`, p.amountAt65, { suffix: "$", wide: true, placeholder: p.amount, hint: "Laissé vide : identique au montant annuel. Entrez la rente après harmonisation, pas le montant de la réduction." }) : ""}
+    </div>
+    <button type="button" class="link danger" data-action="remove-pension" data-spouse="${i}" data-index="${j}">Retirer cette rente</button></div>`;
   }).join("");
 }
 

@@ -69,7 +69,7 @@ describe("formulaire vers scénario", () => {
 describe("fichiers de scénario", () => {
   it("l'enregistrement puis l'ouverture redonnent le même formulaire", () => {
     const f = defaultForm();
-    f.spouses[0].pensions.push({ label: "Autre", amount: "1000", startAge: "65", indexation: "0", survivorPct: "0" });
+    f.spouses[0].pensions.push({ label: "Autre", amount: "1000", startAge: "65", indexation: "0", survivorPct: "0", harmonization: false, amountAt65: "" });
     f.spouses[1].deathAge = "85";
     expect(formFromJson(formToJson(f))).toEqual(f);
   });
@@ -202,10 +202,10 @@ describe("données de base", () => {
   });
   it("signale une rente ajoutée ou retirée une seule fois", () => {
     const f = defaultForm(), g = clone(f);
-    g.spouses[1].pensions.push({ label: "Autre", amount: "500", startAge: "65", indexation: "0", survivorPct: "0" });
+    g.spouses[1].pensions.push({ label: "Autre", amount: "500", startAge: "65", indexation: "0", survivorPct: "0", harmonization: false, amountAt65: "" });
     expect(describeChanges(f, g)).toEqual(["Sam : rente 2 ajoutée"]);
     expect(describeChanges(g, f)).toEqual(["Sam : rente 2 retirée"]);
-    expect(changedPaths(f, g).size).toBe(5);
+    expect(changedPaths(f, g).size).toBe(7);   // les 5 champs d'une rente + la case d'harmonisation et le montant à 65 ans
   });
   it("le nom de la stratégie est lisible", () => {
     const f = defaultForm(), g = clone(f);
@@ -387,5 +387,68 @@ describe("préférences d'affichage", () => {
     expect(parsePrefs("pas du json")).toEqual(ALL_OFF);
     expect(parsePrefs("null")).toEqual(ALL_OFF);
     expect(parsePrefs('{"real":"oui","hideForm":1,"hideDetailNote":"true"}')).toEqual(ALL_OFF);
+  });
+});
+
+describe("harmonisation RRQ à 65 ans dans le formulaire", () => {
+  const withPension = (mutate: (p: ReturnType<typeof defaultForm>["spouses"][0]["pensions"][0]) => void) => {
+    const f = defaultForm(); mutate(f.spouses[0].pensions[0]); return f;
+  };
+  it("désactivée par défaut : aucun montant à 65 ans dans le scénario", () => {
+    const f = defaultForm();
+    expect(f.spouses[0].pensions[0].harmonization).toBe(false);
+    expect(toScenario(f).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(undefined);
+  });
+  it("cochée avec le montant vide : le montant à 65 ans est le montant annuel", () => {
+    const f = withPension((p) => { p.harmonization = true; });
+    expect(toScenario(f).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(45000);
+    const g = withPension((p) => { p.harmonization = true; p.amount = "52000"; });
+    expect(toScenario(g).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(52000);     // suit le montant annuel
+  });
+  it("cochée avec un montant : il est utilisé; décochée, il est ignoré", () => {
+    const f = withPension((p) => { p.harmonization = true; p.amountAt65 = "38 500,50"; });
+    expect(toScenario(f).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(38500.5);
+    const g = withPension((p) => { p.harmonization = false; p.amountAt65 = "38500"; });
+    expect(toScenario(g).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(undefined);
+  });
+  it("valide le montant à 65 ans, avec le prénom et le numéro de la rente", () => {
+    const bad = toScenario(withPension((p) => { p.harmonization = true; p.amountAt65 = "abc"; }));
+    expect(bad.errors.some((e) => e.includes("Alex : rente 1, montant à 65 ans"))).toBe(true);
+    const neg = toScenario(withPension((p) => { p.harmonization = true; p.amountAt65 = "-5"; }));
+    expect(neg.errors.some((e) => e.includes("montant à 65 ans"))).toBe(true);
+    // décochée, un texte invalide n'est pas signalé
+    expect(toScenario(withPension((p) => { p.amountAt65 = "abc"; })).errors).toEqual([]);
+  });
+  it("le formulaire montre la case, et le champ du montant seulement quand elle est cochée", () => {
+    const f = defaultForm();
+    const off = renderForm(f, new Set(["spouse0"]));
+    expect(off).toContain('data-path="spouses.0.pensions.0.harmonization"');
+    expect(off).toContain("Harmonisation RRQ à 65 ans");
+    expect(off).not.toContain('data-path="spouses.0.pensions.0.amountAt65"');
+    f.spouses[0].pensions[0].harmonization = true;
+    const on = renderForm(f, new Set(["spouse0"]));
+    expect(/<input type="checkbox" data-path="spouses\.0\.pensions\.0\.harmonization"[^>]*checked/.test(on)).toBe(true);
+    expect(on).toContain("Montant de la pension à 65 ans");
+    expect(/data-path="spouses\.0\.pensions\.0\.amountAt65"[^>]*placeholder="45000"/.test(on)).toBe(true);   // le montant annuel, par défaut
+    expect(on).toContain("Avant 65 ans");
+  });
+  it("suit les changements depuis la base, avec un libellé lisible", () => {
+    const a = defaultForm(), b = JSON.parse(JSON.stringify(a)) as typeof a;
+    b.spouses[0].pensions[0].harmonization = true;
+    b.spouses[0].pensions[0].amountAt65 = "38000";
+    expect(describeChanges(a, b)).toEqual(["Alex, rente 1 (harmonisation RRQ à 65 ans) : non → oui", "Alex, rente 1 (montant à 65 ans) : vide → 38000"]);
+  });
+  it("un ancien fichier, ou une ancienne donnée de base, sans ces champs reprend « non » et le montant vide", () => {
+    const old = JSON.parse(JSON.stringify(defaultForm()));
+    delete old.spouses[0].pensions[0].harmonization; delete old.spouses[0].pensions[0].amountAt65;
+    const back = formFromJson(JSON.stringify({ form: old }));
+    expect(back.spouses[0].pensions[0].harmonization).toBe(false);
+    expect(back.spouses[0].pensions[0].amountAt65).toBe("");
+  });
+  it("l'aller-retour par fichier conserve la case et le montant", () => {
+    const f = withPension((p) => { p.harmonization = true; p.amountAt65 = "36000"; });
+    const back = fileFromJson(fileToJson(f, null)).form.spouses[0].pensions[0];
+    expect(back.harmonization).toBe(true);
+    expect(back.amountAt65).toBe("36000");
   });
 });

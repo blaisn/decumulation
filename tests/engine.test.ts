@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import table2026 from "../src/engine/data/tax-2026.json";
 import { progressiveTax, householdTax, optimizeSplit, indexTable, marginalRate } from "../src/engine/tax";
-import { runProjection } from "../src/engine/projection";
+import { runProjection, dbAmount } from "../src/engine/projection";
 import { compareStrategies, defaultCandidates, compareDeathOrders, deathScenarios, applyDeathScenario, summarize, compareLongevity, longevityScenarios } from "../src/engine/compare";
 import { gompertz, representativeDeathAges } from "../src/engine/mortality";
 import type { Scenario, TaxYearTable } from "../src/engine/types";
@@ -536,5 +536,63 @@ describe("fractionnement du revenu de pension (option)", () => {
     expect(later(a).length).toBeGreaterThan(10);
     // tant que le survivant est seul, les deux plans ne diffèrent que par l'héritage des années précédentes : ils doivent rester proches
     expect(Math.abs(later(a)[later(a).length - 1] - later(b)[later(b).length - 1]) / later(a)[later(a).length - 1]).toBeLessThan(0.25);
+  });
+});
+
+describe("harmonisation de la rente avec la RRQ à 65 ans", () => {
+  const mk = (deathAgeA?: number, amountAt65?: number): Scenario => {
+    const pension = { label: "RPA", annualAmount: 40000, startAge: 62, indexation: 0.02, survivorPct: 0.6, ...(amountAt65 === undefined ? {} : { amountAt65 }) };
+    const base = { rrq: { annualAmount: 0, startAge: 65 }, psv: { annualAmount: 0, startAge: 65 }, reer: 500000, celi: 100000, celiRoom: 40000 };
+    return {
+      spouses: [{ name: "A", birthYear: 1965, deathAge: deathAgeA, dbPensions: [pension], ...base }, { name: "B", birthYear: 1965, dbPensions: [], ...base }],
+      targetNetSpending: 50000,
+      assumptions: { startYear: 2026, endAge: 95, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 },
+    };
+  };
+  const pensionOf = (rows: ReturnType<typeof runProjection>, year: number, who: 0 | 1) => rows.find((y) => y.year === year)!.spouses[who].pensionIncome;
+
+  it("avant 65 ans le montant annuel s'applique, à partir de 65 ans le montant à 65 ans", () => {
+    const rows = runProjection(mk(undefined, 30000), tax);      // né en 1965 : 65 ans en 2030
+    expect(pensionOf(rows, 2025 + 1, 0)).toBe(0);                 // 61 ans : la rente n'a pas commencé
+    expect(pensionOf(rows, 2027, 0)).toBeCloseTo(40000 * Math.pow(1.02, 1), 4);   // 62 ans
+    expect(pensionOf(rows, 2029, 0)).toBeCloseTo(40000 * Math.pow(1.02, 3), 4);   // 64 ans
+    expect(pensionOf(rows, 2030, 0)).toBeCloseTo(30000 * Math.pow(1.02, 4), 4);   // 65 ans
+    expect(pensionOf(rows, 2040, 0)).toBeCloseTo(30000 * Math.pow(1.02, 14), 4);
+  });
+  it("sans harmonisation la rente ne change pas à 65 ans", () => {
+    const rows = runProjection(mk(), tax);
+    expect(pensionOf(rows, 2030, 0)).toBeCloseTo(40000 * Math.pow(1.02, 4), 4);
+  });
+  it("un montant à 65 ans égal au montant annuel donne exactement le même plan qu'aucune harmonisation", () => {
+    expect(JSON.stringify(runProjection(mk(undefined, 40000), tax))).toBe(JSON.stringify(runProjection(mk(), tax)));
+  });
+  it("la baisse à 65 ans réduit l'impôt et les revenus, et le plan reste financé par les comptes", () => {
+    const avec = runProjection(mk(undefined, 30000), tax), sans = runProjection(mk(), tax);
+    const tot = (rows: typeof avec) => rows.reduce((s, y) => s + y.spouses[0].tax + y.spouses[1].tax, 0);
+    expect(tot(avec)).toBeLessThan(tot(sans));
+    expect(avec.every((y) => y.shortfall < 1)).toBe(true);
+    // avant 71 ans (pas encore de retraits FERR minimums), la différence de revenu est compensée par des retraits plus élevés
+    const w = (rows: typeof avec) => rows.filter((y) => y.year >= 2030 && y.year <= 2035).reduce((s, y) => s + y.spouses[0].reerWithdrawal + y.spouses[1].reerWithdrawal, 0);
+    expect(w(avec)).toBeGreaterThan(w(sans));
+  });
+  it("rente de survivant : calculée sur le montant du défunt à son âge au décès", () => {
+    // décès à 70 ans (2035) : le défunt touchait le montant à 65 ans -> survivant 60 % de 30 000 $, indexé
+    const tard = runProjection(mk(70, 30000), tax);
+    expect(pensionOf(tard, 2036, 1)).toBeCloseTo(0.6 * 30000 * Math.pow(1.02, 10), 4);
+    // décès à 62 ans (2027) : il touchait encore le montant annuel -> survivant 60 % de 40 000 $
+    const tot = runProjection(mk(62, 30000), tax);
+    expect(pensionOf(tot, 2028, 1)).toBeCloseTo(0.6 * 40000 * Math.pow(1.02, 2), 4);
+  });
+  it("une rente qui commence après 65 ans utilise le montant à 65 ans dès le début", () => {
+    const sc = mk(undefined, 30000);
+    sc.spouses[0].dbPensions[0].startAge = 67;
+    expect(pensionOf(runProjection(sc, tax), 2032, 0)).toBeCloseTo(30000 * Math.pow(1.02, 6), 4);   // 67 ans
+  });
+  it("dbAmount : aucune harmonisation, avant et après 65 ans", () => {
+    const p = { label: "x", annualAmount: 1000, startAge: 60, indexation: 0, survivorPct: 0.5 };
+    expect(dbAmount(p, 70)).toBe(1000);
+    expect(dbAmount({ ...p, amountAt65: 600 }, 64)).toBe(1000);
+    expect(dbAmount({ ...p, amountAt65: 600 }, 65)).toBe(600);
+    expect(dbAmount({ ...p, amountAt65: 0 }, 80)).toBe(0);      // zéro est une valeur valide, pas « absent »
   });
 });

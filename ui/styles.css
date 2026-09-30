@@ -84,6 +84,7 @@ fieldset { margin: 16px 0 0; padding: 0; border: 0; min-width: 0; }
 legend { padding: 0; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
 .pension { padding: 10px 0 6px; border-top: 1px solid var(--rule-soft); }
 .pension .link { margin-top: 2px; font-size: 12.5px; }
+.pension .harm { margin-top: 8px; }
 .check { display: flex; align-items: center; gap: 8px; }
 .check input { width: 16px; height: 16px; accent-color: var(--action); }
 .check.inline { margin: 6px 0 10px; }

@@ -1,8 +1,12 @@
-import type { CompareOptions, Scenario, SpouseInput, Strategy } from "../../src/index";
+import type { CompareOptions, DbPension, Scenario, SpouseInput, Strategy } from "../../src/index";
 
 // L'état du formulaire garde les valeurs telles que saisies (texte); la conversion se fait dans `toScenario`.
 
-export interface PensionForm { label: string; amount: string; startAge: string; indexation: string; survivorPct: string }
+export interface PensionForm {
+  label: string; amount: string; startAge: string; indexation: string; survivorPct: string;
+  harmonization: boolean; // harmonisation avec la RRQ à 65 ans (case à cocher)
+  amountAt65: string; // montant à partir de 65 ans; vide = identique au montant annuel
+}
 export interface SpouseForm {
   name: string; birthYear: string; deathAge: string; lifeExpectancy: string;
   reer: string; celi: string; celiRoom: string; nonReg: string;
@@ -26,7 +30,7 @@ export interface FormState {
   strategy: StrategyForm;
 }
 
-const pension = (label: string, amount: string): PensionForm => ({ label, amount, startAge: "62", indexation: "2", survivorPct: "60" });
+const pension = (label: string, amount: string): PensionForm => ({ label, amount, startAge: "62", indexation: "2", survivorPct: "60", harmonization: false, amountAt65: "" });
 const spouse = (name: string, birthYear: string, pensionAmount: string): SpouseForm => ({
   name, birthYear, deathAge: "", lifeExpectancy: "21",
   reer: "600000", celi: "90000", celiRoom: "40000", nonReg: "0",
@@ -101,13 +105,19 @@ export function toScenario(f: FormState): Parsed {
       nonRegistered: need(L("compte non enregistré"), s.nonReg, { min: 0 }),
       rrq: { annualAmount: need(L("rente RRQ annuelle"), s.rrqAmount, { min: 0 }), startAge: need(L("âge de début de la RRQ"), s.rrqStartAge, { int: true, min: 60, max: 72 }) },
       psv: { annualAmount: need(L("PSV annuelle"), s.psvAmount, { min: 0 }), startAge: need(L("âge de début de la PSV"), s.psvStartAge, { int: true, min: 65, max: 70 }) },
-      dbPensions: s.pensions.map((p, j) => ({
-        label: p.label.trim() || `Rente ${j + 1}`,
-        annualAmount: need(L(`rente ${j + 1}, montant annuel`), p.amount, { min: 0 }),
-        startAge: need(L(`rente ${j + 1}, âge de début`), p.startAge, { int: true, min: 40, max: 100 }),
-        indexation: pct(L(`rente ${j + 1}, indexation`), p.indexation, 20),
-        survivorPct: pct(L(`rente ${j + 1}, part versée au survivant`), p.survivorPct),
-      })),
+      dbPensions: s.pensions.map((p, j): DbPension => {
+        const annualAmount = need(L(`rente ${j + 1}, montant annuel`), p.amount, { min: 0 });
+        const pension: DbPension = {
+          label: p.label.trim() || `Rente ${j + 1}`,
+          annualAmount,
+          startAge: need(L(`rente ${j + 1}, âge de début`), p.startAge, { int: true, min: 40, max: 100 }),
+          indexation: pct(L(`rente ${j + 1}, indexation`), p.indexation, 20),
+          survivorPct: pct(L(`rente ${j + 1}, part versée au survivant`), p.survivorPct),
+        };
+        // Harmonisation RRQ : le montant à 65 ans, par défaut le montant annuel (aucun changement à 65 ans).
+        if (p.harmonization) pension.amountAt65 = p.amountAt65.trim() === "" ? annualAmount : need(L(`rente ${j + 1}, montant à 65 ans`), p.amountAt65, { min: 0 });
+        return pension;
+      }),
     };
   }) as [SpouseInput, SpouseInput];
 
@@ -220,6 +230,7 @@ const KEY_LABELS: Record<string, string> = {
   name: "Prénom", birthYear: "Année de naissance", deathAge: "Âge au décès", lifeExpectancy: "Espérance de vie à 65 ans", reer: "REER/FERR", celi: "CELI", celiRoom: "Droits CELI inutilisés",
   nonReg: "Compte non enregistré", rrqAmount: "RRQ, montant annuel", rrqStartAge: "RRQ, début", psvAmount: "PSV, montant annuel", psvStartAge: "PSV, début",
   label: "nom", amount: "montant annuel", startAge: "début", indexation: "indexation", survivorPct: "part au survivant",
+  harmonization: "harmonisation RRQ à 65 ans", amountAt65: "montant à 65 ans",
   kind: "Ordre des retraits", ceiling: "Revenu plafond", usePsvThreshold: "Plafond au seuil de la PSV", untilAge: "Fonte jusqu'à l'âge",
 };
 
