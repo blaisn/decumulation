@@ -369,17 +369,23 @@ describe("case « Appliquer le fractionnement du revenu de pension »", () => {
 });
 
 describe("préférences d'affichage", () => {
-  it("lit les deux préférences et met les valeurs par défaut si elles manquent", () => {
-    expect(parsePrefs('{"real":true,"hideForm":true}')).toEqual({ real: true, hideForm: true });
-    expect(parsePrefs('{"real":false}')).toEqual({ real: false, hideForm: false });
-    expect(parsePrefs(null)).toEqual({ real: false, hideForm: false });
+  const ALL_OFF = { real: false, hideForm: false, hideDetailNote: false };
+  it("lit les trois préférences et met les valeurs par défaut si elles manquent", () => {
+    expect(parsePrefs('{"real":true,"hideForm":true,"hideDetailNote":true}')).toEqual({ real: true, hideForm: true, hideDetailNote: true });
+    expect(parsePrefs('{"real":false}')).toEqual(ALL_OFF);
+    expect(parsePrefs(null)).toEqual(ALL_OFF);
   });
-  it("une ancienne préférence sans « hideForm » garde l'unité choisie et laisse le formulaire visible", () => {
-    expect(parsePrefs('{"real":true}')).toEqual({ real: true, hideForm: false });
+  it("une ancienne préférence garde ce qu'elle contient et laisse le reste visible", () => {
+    expect(parsePrefs('{"real":true}')).toEqual({ ...ALL_OFF, real: true });
+    expect(parsePrefs('{"real":true,"hideForm":true}')).toEqual({ real: true, hideForm: true, hideDetailNote: false });
+  });
+  it("chaque préférence est indépendante des autres", () => {
+    expect(parsePrefs('{"hideDetailNote":true}')).toEqual({ ...ALL_OFF, hideDetailNote: true });
+    expect(parsePrefs('{"hideForm":true}')).toEqual({ ...ALL_OFF, hideForm: true });
   });
   it("ignore les valeurs invalides ou d'un mauvais type", () => {
-    expect(parsePrefs("pas du json")).toEqual({ real: false, hideForm: false });
-    expect(parsePrefs("null")).toEqual({ real: false, hideForm: false });
-    expect(parsePrefs('{"real":"oui","hideForm":1}')).toEqual({ real: false, hideForm: false });
+    expect(parsePrefs("pas du json")).toEqual(ALL_OFF);
+    expect(parsePrefs("null")).toEqual(ALL_OFF);
+    expect(parsePrefs('{"real":"oui","hideForm":1,"hideDetailNote":"true"}')).toEqual(ALL_OFF);
   });
 });
