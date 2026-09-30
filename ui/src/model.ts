@@ -193,7 +193,7 @@ export function formFromJson(text: string): FormState {
 }
 
 export function formToJson(f: FormState): string {
-  return JSON.stringify({ application: "retraite-planner", form: f }, null, 2);
+  return JSON.stringify({ application: "decumulation", form: f }, null, 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ export function describeChanges(base: FormState, cur: FormState): string[] {
 
 /** Fichier de scénario : les données actuelles et, s'il y en a, les données de base. */
 export function fileToJson(form: FormState, base: BaseSnapshot | null): string {
-  return JSON.stringify({ application: "retraite-planner", form, ...(base ? { base } : {}) }, null, 2);
+  return JSON.stringify({ application: "decumulation", form, ...(base ? { base } : {}) }, null, 2);
 }
 
 export function fileFromJson(text: string): { form: FormState; base: BaseSnapshot | null } {

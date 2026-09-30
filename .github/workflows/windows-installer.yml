@@ -1,0 +1,48 @@
+name: Installateur Windows
+
+# Produit l'installateur et la version portable. Lancement manuel (onglet Actions > Run workflow)
+# ou automatique quand on pousse une étiquette de version, par exemple v0.1.0.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Construire pour Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # Aucune signature de code : Windows affichera un avertissement SmartScreen au premier lancement.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Installer les dépendances
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Vérifier les types et lancer les tests
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Construire l'installateur et la version portable
+        run: npm run dist
+
+      - name: Conserver les fichiers produits
+        uses: actions/upload-artifact@v4
+        with:
+          name: decumulation-windows
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 30
