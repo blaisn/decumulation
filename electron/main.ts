@@ -1,11 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DATA_FOLDER, migrateLegacyData } from "./migrate";
 
 // Dossier de données fixé explicitement : il ne dépend ni du nom du paquet ni du nom du produit.
+const DATA_FOLDER = "Decumulation";
 app.setPath("userData", path.join(app.getPath("appData"), DATA_FOLDER));
-try { migrateLegacyData(app.getPath("appData")); } catch { /* la migration est facultative */ }
 
 function createWindow(): void {
   const win = new BrowserWindow({
