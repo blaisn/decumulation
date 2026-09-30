@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 /** Dossier de données de l'application (sous %APPDATA% sous Windows), fixé explicitement, sans accent. */
@@ -9,6 +9,22 @@ export const DATA_FOLDER = "Decumulation";
  * (`npm run start`) ou le nom du produit (version installée ou portable).
  */
 export const LEGACY_FOLDERS = ["retraite-planner", "Plan de décaissement", "Décumulation"];
+
+/**
+ * Copie récursive d'un dossier avec des primitives de base seulement (readdir, mkdir, copyFile).
+ * On évite `fs.cpSync` : avec Node 22 et plus, sa version récursive peut faire planter le processus,
+ * sans message, sur les chemins Windows qui contiennent des accents (nodejs/node#54476). Or les noms
+ * d'utilisateur accentués sont courants, et les anciens dossiers de cette application aussi.
+ */
+export function copyDirSync(src: string, dst: string): void {
+  mkdirSync(dst, { recursive: true });
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const to = path.join(dst, entry.name);
+    if (entry.isDirectory()) copyDirSync(from, to);
+    else if (entry.isFile()) copyFileSync(from, to);
+  }
+}
 
 /** Date de dernière modification du stockage local : le fichier le plus récent de « Local Storage ». */
 function lastWrite(localStorageDir: string): number {
@@ -37,6 +53,6 @@ export function migrateLegacyData(appDataDir: string, dataDir = path.join(appDat
     .sort((a, b) => b.time - a.time);
   if (!found.length) return null;
   mkdirSync(dataDir, { recursive: true });
-  cpSync(found[0].dir, target, { recursive: true });
+  copyDirSync(found[0].dir, target);
   return path.dirname(found[0].dir);
 }
