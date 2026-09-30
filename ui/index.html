@@ -16,7 +16,13 @@
     <aside id="inputs" class="inputs" aria-label="Données du couple"><div id="basebar" class="basebar" aria-live="polite"></div><div id="formbody"></div></aside>
     <section class="results" aria-label="Résultats">
       <div class="tabbar">
-        <div id="tabs" class="tabs" role="tablist" aria-label="Sections des résultats"></div>
+        <div class="lead">
+          <button type="button" id="toggle-form" class="toggle" aria-controls="inputs" aria-expanded="true">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor" stroke-width="1.4"/></svg>
+            <span class="lbl">Masquer le formulaire</span>
+          </button>
+          <div id="tabs" class="tabs" role="tablist" aria-label="Sections des résultats"></div>
+        </div>
         <div id="units" class="units" role="radiogroup" aria-labelledby="units-l"></div>
       </div>
       <div id="panel" class="panel" role="tabpanel"></div>
