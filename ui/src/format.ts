@@ -13,4 +13,7 @@ export function fmtCompact(x: number): string {
   return `${Math.round(x)} $`;
 }
 
+/** Pourcentage à deux décimales : 0.3612 -> « 36,12 % ». */
+export const fmtPct = (x: number) => `${(x * 100).toLocaleString("fr-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
+
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);

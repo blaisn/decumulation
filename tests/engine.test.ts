@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import table2026 from "../src/engine/data/tax-2026.json";
-import { progressiveTax, householdTax, optimizeSplit, indexTable } from "../src/engine/tax";
+import { progressiveTax, householdTax, optimizeSplit, indexTable, marginalRate } from "../src/engine/tax";
 import { runProjection } from "../src/engine/projection";
 import { compareStrategies, defaultCandidates, compareDeathOrders, deathScenarios, applyDeathScenario, summarize, compareLongevity, longevityScenarios } from "../src/engine/compare";
 import { gompertz, representativeDeathAges } from "../src/engine/mortality";
@@ -452,3 +452,49 @@ describe("comparaison selon la durée de vie des deux conjoints", () => {
   });
 });
 
+describe("taux marginal d'imposition", () => {
+  it("combine le palier fédéral (après l'abattement du Québec) et celui du Québec", () => {
+    expect(marginalRate(30000, tax)).toBeCloseTo(0.2569, 4);      // 14 % x 0,835 + 14 %
+    expect(marginalRate(70000, tax)).toBeCloseTo(0.361175, 5);    // 20,5 % x 0,835 + 19 %
+    expect(marginalRate(110301, tax)).toBeCloseTo(0.411175, 5);   // 20,5 % x 0,835 + 24 %
+    expect(marginalRate(200000, tax)).toBeCloseTo(0.49965, 5);    // 29 % x 0,835 + 25,75 %
+  });
+  it("change de palier au seuil exact : le prochain dollar est imposé au taux supérieur", () => {
+    expect(marginalRate(54344, tax)).toBeCloseTo(0.2569, 4);
+    expect(marginalRate(54345, tax)).toBeCloseTo(0.3069, 4);
+  });
+  it("suit l'indexation des paliers", () => {
+    const t2 = indexTable(tax, 1.1);
+    expect(marginalRate(54345 * 1.1 - 1, t2)).toBeCloseTo(0.2569, 4);
+    expect(marginalRate(54345 * 1.1 + 1, t2)).toBeCloseTo(0.3069, 4);
+  });
+  it("householdTax donne un taux marginal par conjoint, à partir du revenu imposable après fractionnement et récupération de la PSV", () => {
+    const r = householdTax([{ age: 66, income: 120000, eligiblePension: 0 }, { age: 66, income: 20000, eligiblePension: 0 }], tax);
+    expect(r.marginal[0]).toBeCloseTo(0.4571, 4);   // 26 % x 0,835 + 24 %
+    expect(r.marginal[1]).toBeCloseTo(0.2569, 4);
+    const seul = householdTax([{ age: 70, income: 70000, eligiblePension: 0 }, null], tax);
+    expect(seul.marginal[0]).toBeCloseTo(0.361175, 5);
+    expect(seul.marginal[1]).toBe(0);
+    // récupération de la PSV : le revenu imposable est réduit avant de chercher le palier (108 680 $ = seuil du palier du Québec)
+    const avecPsv = householdTax([{ age: 70, income: 116000, eligiblePension: 0, psv: 9000 }, null], tax);
+    expect(avecPsv.clawback[0]).toBeCloseTo(0.15 * (116000 - 95323), 2);
+    expect(avecPsv.marginal[0]).toBeCloseTo(0.171175 + 0.24, 5);
+  });
+  it("la projection donne un taux marginal par conjoint et par année, et 0 après un décès", () => {
+    const person = (name: string, birthYear: number, deathAge?: number) => ({
+      name, birthYear, deathAge,
+      dbPensions: [{ label: "RPA", annualAmount: 40000, startAge: 62, indexation: 0.02, survivorPct: 0.6 }],
+      rrq: { annualAmount: 14000, startAge: 65 }, psv: { annualAmount: 8700, startAge: 65 }, reer: 600000, celi: 90000, celiRoom: 40000,
+    });
+    const sc: Scenario = {
+      spouses: [person("A", 1960, 80), person("B", 1962)], targetNetSpending: 100000,
+      assumptions: { startYear: 2026, endAge: 95, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 },
+    };
+    const rows = runProjection(sc, tax);
+    for (const y of rows) y.spouses.forEach((p) => {
+      if (p.alive) { expect(p.marginalRate).toBeGreaterThan(0.25); expect(p.marginalRate).toBeLessThan(0.55); }
+      else expect(p.marginalRate).toBe(0);
+    });
+    expect(rows.find((y) => y.year === 2045)!.spouses[0].alive).toBe(false);
+  });
+});

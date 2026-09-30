@@ -1,28 +1,41 @@
 import type { DeathOrderComparison, Scenario, StrategySummary, YearResult } from "../../src/index";
-import { esc, fmtMoney, fmtNum } from "./format";
+import { esc, fmtMoney, fmtNum, fmtPct } from "./format";
 
 const deflate = (s: Scenario, real: boolean) => (year: number, x: number) => (real ? x / Math.pow(1 + s.assumptions.inflation, year - s.assumptions.startYear) : x);
 
-/** Détail du plan, une ligne par année, pour le ménage. */
+/**
+ * Détail du plan, une ligne par année, pour le ménage; le revenu imposable et le taux marginal sont donnés
+ * pour chaque conjoint (l'impôt se calcule par personne). « — » indique un conjoint décédé.
+ */
 export function yearTable(s: Scenario, rows: YearResult[], real: boolean): string {
   const d = deflate(s, real);
   const sum = (y: YearResult, pick: (p: YearResult["spouses"][0]) => number) => y.spouses[0] ? pick(y.spouses[0]) + pick(y.spouses[1]) : 0;
-  const head = ["Année", "Âges", "Rentes de régimes", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI et non enr.", "Impôt", "PSV récupérée", "Pension fractionnée", "Dépenses visées", "Manque", "Solde REER/FERR", "Solde CELI", "Solde non enr."];
+  const [n0, n1] = s.spouses.map((x) => x.name);
+  const head: { label: string; sub?: string }[] = [
+    { label: "Année" }, { label: "Âges" }, { label: "Rentes de régimes" }, { label: "RRQ" }, { label: "PSV" }, { label: "Retraits REER/FERR" },
+    { label: "Retraits CELI et non enr." }, { label: "Impôt" }, { label: "PSV récupérée" }, { label: "Pension fractionnée" },
+    { label: "Revenu imposable", sub: n0 }, { label: "Revenu imposable", sub: n1 }, { label: "Taux marginal", sub: n0 }, { label: "Taux marginal", sub: n1 },
+    { label: "Dépenses visées" }, { label: "Manque" }, { label: "Solde REER/FERR" }, { label: "Solde CELI" }, { label: "Solde non enr." },
+  ];
+  const taxable = (y: YearResult, i: 0 | 1) => (y.spouses[i].alive ? d(y.year, y.spouses[i].taxableIncome) : "—");
+  const marginal = (y: YearResult, i: 0 | 1) => (y.spouses[i].alive ? fmtPct(y.spouses[i].marginalRate) : "—");
   const body = rows.map((y) => {
     const ages = y.spouses.map((p) => (p.alive ? String(p.age) : "†")).join(" / ");
     const split = Math.max(y.spouses[0].pensionSplit, y.spouses[1].pensionSplit);
-    const cells = [
+    const cells: (string | number)[] = [
       String(y.year), ages,
       d(y.year, sum(y, (p) => p.pensionIncome)), d(y.year, sum(y, (p) => p.rrqIncome)), d(y.year, sum(y, (p) => p.psvIncome)),
       d(y.year, sum(y, (p) => p.reerWithdrawal)),
       d(y.year, sum(y, (p) => p.celiWithdrawal + p.nonRegWithdrawal)), d(y.year, sum(y, (p) => p.tax)), d(y.year, sum(y, (p) => p.psvClawback)),
-      d(y.year, split), d(y.year, y.targetSpending), d(y.year, y.shortfall),
+      d(y.year, split), taxable(y, 0), taxable(y, 1), marginal(y, 0), marginal(y, 1),
+      d(y.year, y.targetSpending), d(y.year, y.shortfall),
       d(y.year, sum(y, (p) => p.reerBalanceEnd)), d(y.year, sum(y, (p) => p.celiBalanceEnd)), d(y.year, sum(y, (p) => p.nonRegBalanceEnd)),
     ];
     const cls = y.shortfall > 1 ? ' class="short"' : "";
     return `<tr${cls}>${cells.map((c, i) => (i < 2 ? `<th scope="row"${i === 1 ? ' class="ages"' : ""}>${esc(String(c))}</th>` : `<td>${typeof c === "number" ? fmtNum(c) : esc(c)}</td>`)).join("")}</tr>`;
   });
-  return `<div class="scroll"><table class="data year"><thead><tr>${head.map((h, i) => `<th scope="col"${i > 1 ? ' class="num"' : ""}>${esc(h)}</th>`).join("")}</tr></thead><tbody>${body.join("")}</tbody></table></div>`;
+  const th = (h: { label: string; sub?: string }, i: number) => `<th scope="col"${i > 1 ? ' class="num"' : ""}>${esc(h.label)}${h.sub ? `<span class="sub">${esc(h.sub)}</span>` : ""}</th>`;
+  return `<div class="scroll"><table class="data year"><thead><tr>${head.map(th).join("")}</tr></thead><tbody>${body.join("")}</tbody></table></div>`;
 }
 
 /** Regroupe les lignes dont la clé est identique : garde la première et compte les équivalentes. */

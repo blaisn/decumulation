@@ -96,11 +96,15 @@ describe("export et affichage", () => {
     expect(csv.charCodeAt(0)).toBe(0xfeff);
     expect(csv.trim().split("\r\n").length).toBe(1 + rows.length * 2);
     expect(has(csv, '"<b>""Alex""</b>"')).toBe(true); // guillemets échappés
-    expect(csv.split("\r\n")[0].split(";").length).toBe(21);
+    const head = csv.split("\r\n")[0].split(";");
+    expect(head.length).toBe(22);
+    expect(head[20]).toBe("Indice d'inflation (départ = 1)");    // les 21 premières colonnes n'ont pas bougé
+    expect(head[21]).toBe("Taux marginal (%)");
     const first = csv.split("\r\n")[1].split(";");
-    expect(first[first.length - 1]).toBe("1,0000"); // indice d'inflation de l'année de départ
+    expect(first[20]).toBe("1,0000");                              // indice d'inflation de l'année de départ
+    expect(first[21]).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
     const second = csv.split("\r\n")[3].split(";");
-    expect(second[second.length - 1]).toBe("1,0200");
+    expect(second[20]).toBe("1,0200");
   });
   it("les graphiques sont des SVG accessibles; les noms sont échappés", () => {
     const b = balancesChart(s, rows, true);
@@ -127,6 +131,26 @@ describe("export et affichage", () => {
     expect(cells[1]).toBe(pick((p) => p.rrqIncome));
     expect(cells[2]).toBe(pick((p) => p.psvIncome));
     expect(cells[0] + cells[1] + cells[2]).toBeCloseTo(pick((p) => p.guaranteedIncome), -1);
+  });
+  it("le tableau annuel donne le revenu imposable et le taux marginal de chaque conjoint, « — » après un décès", () => {
+    const t = yearTable(s, rows, false);
+    const headers = [...t.matchAll(/<th scope="col"[^>]*>([^<]*)(?:<span class="sub">([^<]*)<\/span>)?<\/th>/g)].map((m) => (m[2] ? `${m[1]} / ${m[2]}` : m[1]));
+    const i = headers.indexOf("Pension fractionnée");
+    expect(headers.slice(i + 1, i + 5)).toEqual(["Revenu imposable / &lt;b&gt;&quot;Alex&quot;&lt;/b&gt;", "Revenu imposable / Sam", "Taux marginal / &lt;b&gt;&quot;Alex&quot;&lt;/b&gt;", "Taux marginal / Sam"]);
+    const line = (year: number) => t.split("<tbody>")[1].split("</tr>").find((tr) => tr.includes(`<th scope="row">${year}</th>`))!;
+    const cells = (year: number) => [...line(year).matchAll(/<td>([^<]*)<\/td>/g)].map((m) => m[1].replace(/[\u00a0\u202f]/g, " "));
+    const a = cells(2033);     // les deux conjoints vivants
+    const y = rows.find((r) => r.year === 2033)!;
+    const digits = (x: string) => x.replace(/[^\d-]/g, "");
+    expect(digits(a[8])).toBe(String(Math.round(y.spouses[0].taxableIncome)));
+    expect(digits(a[9])).toBe(String(Math.round(y.spouses[1].taxableIncome)));
+    expect(a[10]).toMatch(/^\d{2},\d{2} %$/);
+    expect(a[11]).toMatch(/^\d{2},\d{2} %$/);
+    const b = cells(2050);     // Alex est décédé depuis 2042
+    expect(b[8]).toBe("—");
+    expect(b[10]).toBe("—");
+    expect(digits(b[9]).length).toBeGreaterThan(0);
+    expect(b[11]).toMatch(/^\d{2},\d{2} %$/);
   });
   it("le tableau annuel a une ligne par année et marque les décès", () => {
     const t = yearTable(s, rows, true);

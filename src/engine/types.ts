@@ -114,6 +114,7 @@ export interface SpouseYear {
   celiContribution: number;
   nonRegContribution: number;
   nonRegBalanceEnd: number;
+  marginalRate: number; // taux marginal combiné (fédéral après abattement du Québec + Québec) du palier du revenu imposable; 0 si décédé
 }
 
 export interface YearResult {

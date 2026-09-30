@@ -25,7 +25,7 @@ function allocate(total: number, caps: [number, number]): [number, number] {
 const swap = (r: HouseholdTaxResult): HouseholdTaxResult => ({
   tax: [r.tax[1], r.tax[0]], federal: [r.federal[1], r.federal[0]], quebec: [r.quebec[1], r.quebec[0]],
   incomeAfterSplit: [r.incomeAfterSplit[1], r.incomeAfterSplit[0]], clawback: [r.clawback[1], r.clawback[0]],
-  splitAmount: [r.splitAmount[1], r.splitAmount[0]],
+  splitAmount: [r.splitAmount[1], r.splitAmount[0]], marginal: [r.marginal[1], r.marginal[0]],
 });
 
 /**
@@ -189,6 +189,7 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
       taxableIncome: r.incomeAfterSplit[i] - r.clawback[i], psvClawback: r.clawback[i], pensionSplit: r.splitAmount[i], tax: r.tax[i],
       reerBalanceEnd: bal[i].reer, celiBalanceEnd: bal[i].celi,
       nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
+      marginalRate: alive[i] ? r.marginal[i] : 0,
     })) as [SpouseYear, SpouseYear];
 
     results.push({ year, spouses: spouseYears, targetSpending: target, netIncome: target - celiNeed, shortfall: celiNeed });

@@ -1,0 +1,319 @@
+diff -ruN a/README.md b/README.md
+--- a/README.md	2026-09-30 22:07:09.578059896 +0000
++++ b/README.md	2026-09-30 22:07:09.583315691 +0000
+@@ -47,6 +47,7 @@
+ - Rentes RPA admissibles au fractionnement à tout âge; RRQ et PSV ne le sont pas
+ - Fractionnement optimisé chaque année (0 à 50 %, pas de 1 %), tant que les deux conjoints sont en vie
+ - Québec : montants en raison de l'âge, pour personne vivant seule et pour revenus de retraite (1,25 x le revenu, max 3 541 $) mis en commun et réduits une seule fois selon le revenu familial net; montant personnel inutilisé transférable
++- Taux marginal : taux statutaire combiné du palier d'imposition du revenu imposable de chaque conjoint = taux fédéral x (1 − abattement du Québec) + taux du Québec. Il n'inclut ni la récupération de la PSV ni la réduction du montant en raison de l'âge, qui s'ajoutent dans certaines zones de revenu (même convention que la plupart des logiciels de planification)
+ - Récupération fiscale de la PSV : 15 % du revenu net au-dessus du seuil (indexé), plafonnée à la PSV reçue, déductible du revenu net; calculée après fractionnement
+ - Phase-out du montant personnel fédéral ignoré (revenus > 181 440 $)
+ - Bonification de la PSV à 75 ans : à entrer dans le montant annuel de la PSV
+@@ -54,7 +55,7 @@
+ ## Application
+ - **Plan** : phrase-bilan, soldes des comptes sous une ligne de vie par conjoint (début des rentes, FERR à 71 ans, décès), et d'où vient l'argent chaque année avec la ligne « dépenses et impôt ». Le plan se recalcule automatiquement à chaque modification
+ - **Dollars constants ou courants** : le sélecteur « Montants en » (au-dessus des résultats) s'applique à tous les onglets. *Dollars de 2026* retire l'effet de l'inflation (ce que les montants permettent d'acheter aujourd'hui); *Dollars courants* montre les montants réels de chaque année. Par défaut : dollars courants; le choix est conservé. En dollars courants, l'impôt cumulé additionne des dollars de chaque année et les soldes de fin sont exprimés en dollars de la dernière année
+-- **Détail annuel** : tableau du ménage (revenus détaillés en rentes de régimes, RRQ et PSV) et export CSV (une ligne par conjoint et par année). Le CSV est toujours en dollars courants et contient l'indice d'inflation (départ = 1) : diviser un montant par l'indice donne des dollars de l'année de départ
++- **Détail annuel** : tableau du ménage (revenus détaillés en rentes de régimes, RRQ et PSV; revenu imposable et taux marginal de chaque conjoint) et export CSV (une ligne par conjoint et par année). Le CSV est toujours en dollars courants et contient l'indice d'inflation (départ = 1) : diviser un montant par l'indice donne des dollars de l'année de départ. La dernière colonne du CSV est le taux marginal (%)
+ - **Comparaison à la base** : plan des données de base à côté du plan actuel : verdict en une phrase, liste de ce qui change, tableau côte à côte avec écarts (impôt cumulé, PSV récupérée, dépenses non financées, soldes restants, succession, première année sans fonds) et deux courbes (actifs totaux, impôt payé par année). Avertit si les fonds s'épuisent, ou si les deux plans n'ont pas la même inflation ou année de départ (comparaison en dollars constants alors sur des bases différentes)
+ - **Stratégies** et **Ordre des décès** : lancent `compareStrategies`, et `compareLongevity` (ou `compareDeathOrders` avec le second mode). L'onglet Ordre des décès montre d'abord, pour chaque conjoint, les âges de décès testés et les chances d'atteindre 85, 90 et 95 ans. Les stratégies au résultat identique sont regroupées; « Appliquer » recharge la stratégie choisie dans le formulaire
+ - **Données de base** : « Enregistrer comme données de base » garde un instantané de la situation du couple. En haut du formulaire, l'application indique combien de champs ont changé depuis, les encadre en ocre et en donne la liste (« Voir les changements »). « Revenir aux données de base » annule les essais; « Définir comme nouvelle base » remplace l'instantané
+diff -ruN a/src/engine/projection.ts b/src/engine/projection.ts
+--- a/src/engine/projection.ts	2026-09-30 22:07:09.578580577 +0000
++++ b/src/engine/projection.ts	2026-09-30 22:07:09.588081888 +0000
+@@ -25,7 +25,7 @@
+ const swap = (r: HouseholdTaxResult): HouseholdTaxResult => ({
+   tax: [r.tax[1], r.tax[0]], federal: [r.federal[1], r.federal[0]], quebec: [r.quebec[1], r.quebec[0]],
+   incomeAfterSplit: [r.incomeAfterSplit[1], r.incomeAfterSplit[0]], clawback: [r.clawback[1], r.clawback[0]],
+-  splitAmount: [r.splitAmount[1], r.splitAmount[0]],
++  splitAmount: [r.splitAmount[1], r.splitAmount[0]], marginal: [r.marginal[1], r.marginal[0]],
+ });
+ 
+ /**
+@@ -189,6 +189,7 @@
+       taxableIncome: r.incomeAfterSplit[i] - r.clawback[i], psvClawback: r.clawback[i], pensionSplit: r.splitAmount[i], tax: r.tax[i],
+       reerBalanceEnd: bal[i].reer, celiBalanceEnd: bal[i].celi,
+       nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
++      marginalRate: alive[i] ? r.marginal[i] : 0,
+     })) as [SpouseYear, SpouseYear];
+ 
+     results.push({ year, spouses: spouseYears, targetSpending: target, netIncome: target - celiNeed, shortfall: celiNeed });
+diff -ruN a/src/engine/tax.ts b/src/engine/tax.ts
+--- a/src/engine/tax.ts	2026-09-30 22:07:09.578628677 +0000
++++ b/src/engine/tax.ts	2026-09-30 22:07:09.588447602 +0000
+@@ -16,6 +16,7 @@
+   incomeAfterSplit: [number, number]; // avant déduction de la récupération de la PSV
+   clawback: [number, number]; // récupération fiscale de la PSV (hors impôt)
+   splitAmount: [number, number]; // + reçu / − cédé
++  marginal: [number, number]; // taux marginal combiné de chaque conjoint (voir `marginalRate`)
+ }
+ 
+ const pair = (a: number[]): [number, number] => [a[0], a[1] ?? 0];
+@@ -31,6 +32,16 @@
+   return tax;
+ }
+ 
++/**
++ * Taux marginal statutaire combiné pour un revenu imposable : taux du palier fédéral (après l'abattement du Québec)
++ * plus taux du palier du Québec, pour le prochain dollar gagné. Il ne tient pas compte de la récupération de la PSV
++ * ni de la réduction des montants en raison de l'âge, qui s'ajoutent dans certaines zones de revenu.
++ */
++export function marginalRate(income: number, t: TaxYearTable): number {
++  const rateOf = (bs: Bracket[]) => (bs.find((b) => b.upTo === null || income < b.upTo) ?? bs[bs.length - 1]).rate;
++  return rateOf(t.federal.brackets) * (1 - t.federal.quebecAbatement) + rateOf(t.quebec.brackets);
++}
++
+ /** Indexe paliers, montants personnels et seuils par un facteur (inflation cumulée). */
+ export function indexTable(t: TaxYearTable, f: number): TaxYearTable {
+   const idx = (bs: Bracket[]) => bs.map((b) => ({ ...b, upTo: b.upTo === null ? null : b.upTo * f }));
+@@ -111,6 +122,7 @@
+     federal: pair(federal), quebec: pair(quebec),
+     incomeAfterSplit: pair(incomeAfterSplit), clawback: pair(clawback),
+     splitAmount: pair(splitAmount),
++    marginal: pair(people.map((x) => marginalRate(x.income, t))),
+   };
+ }
+ 
+diff -ruN a/src/engine/types.ts b/src/engine/types.ts
+--- a/src/engine/types.ts	2026-09-30 22:07:09.578677556 +0000
++++ b/src/engine/types.ts	2026-09-30 22:07:09.588842732 +0000
+@@ -114,6 +114,7 @@
+   celiContribution: number;
+   nonRegContribution: number;
+   nonRegBalanceEnd: number;
++  marginalRate: number; // taux marginal combiné (fédéral après abattement du Québec + Québec) du palier du revenu imposable; 0 si décédé
+ }
+ 
+ export interface YearResult {
+diff -ruN a/tests/engine.test.ts b/tests/engine.test.ts
+--- a/tests/engine.test.ts	2026-09-30 22:07:09.578915154 +0000
++++ b/tests/engine.test.ts	2026-09-30 22:07:09.590307428 +0000
+@@ -1,6 +1,6 @@
+ import { describe, it, expect } from "vitest";
+ import table2026 from "../src/engine/data/tax-2026.json";
+-import { progressiveTax, householdTax, optimizeSplit, indexTable } from "../src/engine/tax";
++import { progressiveTax, householdTax, optimizeSplit, indexTable, marginalRate } from "../src/engine/tax";
+ import { runProjection } from "../src/engine/projection";
+ import { compareStrategies, defaultCandidates, compareDeathOrders, deathScenarios, applyDeathScenario, summarize, compareLongevity, longevityScenarios } from "../src/engine/compare";
+ import { gompertz, representativeDeathAges } from "../src/engine/mortality";
+@@ -452,3 +452,49 @@
+   });
+ });
+ 
++describe("taux marginal d'imposition", () => {
++  it("combine le palier fédéral (après l'abattement du Québec) et celui du Québec", () => {
++    expect(marginalRate(30000, tax)).toBeCloseTo(0.2569, 4);      // 14 % x 0,835 + 14 %
++    expect(marginalRate(70000, tax)).toBeCloseTo(0.361175, 5);    // 20,5 % x 0,835 + 19 %
++    expect(marginalRate(110301, tax)).toBeCloseTo(0.411175, 5);   // 20,5 % x 0,835 + 24 %
++    expect(marginalRate(200000, tax)).toBeCloseTo(0.49965, 5);    // 29 % x 0,835 + 25,75 %
++  });
++  it("change de palier au seuil exact : le prochain dollar est imposé au taux supérieur", () => {
++    expect(marginalRate(54344, tax)).toBeCloseTo(0.2569, 4);
++    expect(marginalRate(54345, tax)).toBeCloseTo(0.3069, 4);
++  });
++  it("suit l'indexation des paliers", () => {
++    const t2 = indexTable(tax, 1.1);
++    expect(marginalRate(54345 * 1.1 - 1, t2)).toBeCloseTo(0.2569, 4);
++    expect(marginalRate(54345 * 1.1 + 1, t2)).toBeCloseTo(0.3069, 4);
++  });
++  it("householdTax donne un taux marginal par conjoint, à partir du revenu imposable après fractionnement et récupération de la PSV", () => {
++    const r = householdTax([{ age: 66, income: 120000, eligiblePension: 0 }, { age: 66, income: 20000, eligiblePension: 0 }], tax);
++    expect(r.marginal[0]).toBeCloseTo(0.4571, 4);   // 26 % x 0,835 + 24 %
++    expect(r.marginal[1]).toBeCloseTo(0.2569, 4);
++    const seul = householdTax([{ age: 70, income: 70000, eligiblePension: 0 }, null], tax);
++    expect(seul.marginal[0]).toBeCloseTo(0.361175, 5);
++    expect(seul.marginal[1]).toBe(0);
++    // récupération de la PSV : le revenu imposable est réduit avant de chercher le palier (108 680 $ = seuil du palier du Québec)
++    const avecPsv = householdTax([{ age: 70, income: 116000, eligiblePension: 0, psv: 9000 }, null], tax);
++    expect(avecPsv.clawback[0]).toBeCloseTo(0.15 * (116000 - 95323), 2);
++    expect(avecPsv.marginal[0]).toBeCloseTo(0.171175 + 0.24, 5);
++  });
++  it("la projection donne un taux marginal par conjoint et par année, et 0 après un décès", () => {
++    const person = (name: string, birthYear: number, deathAge?: number) => ({
++      name, birthYear, deathAge,
++      dbPensions: [{ label: "RPA", annualAmount: 40000, startAge: 62, indexation: 0.02, survivorPct: 0.6 }],
++      rrq: { annualAmount: 14000, startAge: 65 }, psv: { annualAmount: 8700, startAge: 65 }, reer: 600000, celi: 90000, celiRoom: 40000,
++    });
++    const sc: Scenario = {
++      spouses: [person("A", 1960, 80), person("B", 1962)], targetNetSpending: 100000,
++      assumptions: { startYear: 2026, endAge: 95, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 },
++    };
++    const rows = runProjection(sc, tax);
++    for (const y of rows) y.spouses.forEach((p) => {
++      if (p.alive) { expect(p.marginalRate).toBeGreaterThan(0.25); expect(p.marginalRate).toBeLessThan(0.55); }
++      else expect(p.marginalRate).toBe(0);
++    });
++    expect(rows.find((y) => y.year === 2045)!.spouses[0].alive).toBe(false);
++  });
++});
+diff -ruN a/tests/ui.test.ts b/tests/ui.test.ts
+--- a/tests/ui.test.ts	2026-09-30 22:07:09.578970522 +0000
++++ b/tests/ui.test.ts	2026-09-30 22:07:09.590731810 +0000
+@@ -96,11 +96,15 @@
+     expect(csv.charCodeAt(0)).toBe(0xfeff);
+     expect(csv.trim().split("\r\n").length).toBe(1 + rows.length * 2);
+     expect(has(csv, '"<b>""Alex""</b>"')).toBe(true); // guillemets échappés
+-    expect(csv.split("\r\n")[0].split(";").length).toBe(21);
++    const head = csv.split("\r\n")[0].split(";");
++    expect(head.length).toBe(22);
++    expect(head[20]).toBe("Indice d'inflation (départ = 1)");    // les 21 premières colonnes n'ont pas bougé
++    expect(head[21]).toBe("Taux marginal (%)");
+     const first = csv.split("\r\n")[1].split(";");
+-    expect(first[first.length - 1]).toBe("1,0000"); // indice d'inflation de l'année de départ
++    expect(first[20]).toBe("1,0000");                              // indice d'inflation de l'année de départ
++    expect(first[21]).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
+     const second = csv.split("\r\n")[3].split(";");
+-    expect(second[second.length - 1]).toBe("1,0200");
++    expect(second[20]).toBe("1,0200");
+   });
+   it("les graphiques sont des SVG accessibles; les noms sont échappés", () => {
+     const b = balancesChart(s, rows, true);
+@@ -128,6 +132,26 @@
+     expect(cells[2]).toBe(pick((p) => p.psvIncome));
+     expect(cells[0] + cells[1] + cells[2]).toBeCloseTo(pick((p) => p.guaranteedIncome), -1);
+   });
++  it("le tableau annuel donne le revenu imposable et le taux marginal de chaque conjoint, « — » après un décès", () => {
++    const t = yearTable(s, rows, false);
++    const headers = [...t.matchAll(/<th scope="col"[^>]*>([^<]*)(?:<span class="sub">([^<]*)<\/span>)?<\/th>/g)].map((m) => (m[2] ? `${m[1]} / ${m[2]}` : m[1]));
++    const i = headers.indexOf("Pension fractionnée");
++    expect(headers.slice(i + 1, i + 5)).toEqual(["Revenu imposable / &lt;b&gt;&quot;Alex&quot;&lt;/b&gt;", "Revenu imposable / Sam", "Taux marginal / &lt;b&gt;&quot;Alex&quot;&lt;/b&gt;", "Taux marginal / Sam"]);
++    const line = (year: number) => t.split("<tbody>")[1].split("</tr>").find((tr) => tr.includes(`<th scope="row">${year}</th>`))!;
++    const cells = (year: number) => [...line(year).matchAll(/<td>([^<]*)<\/td>/g)].map((m) => m[1].replace(/[\u00a0\u202f]/g, " "));
++    const a = cells(2033);     // les deux conjoints vivants
++    const y = rows.find((r) => r.year === 2033)!;
++    const digits = (x: string) => x.replace(/[^\d-]/g, "");
++    expect(digits(a[8])).toBe(String(Math.round(y.spouses[0].taxableIncome)));
++    expect(digits(a[9])).toBe(String(Math.round(y.spouses[1].taxableIncome)));
++    expect(a[10]).toMatch(/^\d{2},\d{2} %$/);
++    expect(a[11]).toMatch(/^\d{2},\d{2} %$/);
++    const b = cells(2050);     // Alex est décédé depuis 2042
++    expect(b[8]).toBe("—");
++    expect(b[10]).toBe("—");
++    expect(digits(b[9]).length).toBeGreaterThan(0);
++    expect(b[11]).toMatch(/^\d{2},\d{2} %$/);
++  });
+   it("le tableau annuel a une ligne par année et marque les décès", () => {
+     const t = yearTable(s, rows, true);
+     expect(t.split("<tr").length - 1).toBe(rows.length + 1);
+diff -ruN a/ui/src/csv.ts b/ui/src/csv.ts
+--- a/ui/src/csv.ts	2026-09-30 22:07:09.579417693 +0000
++++ b/ui/src/csv.ts	2026-09-30 22:07:09.593924387 +0000
+@@ -3,7 +3,7 @@
+ const HEADERS = [
+   "Année", "Conjoint", "Âge", "En vie", "Rente de régime de retraite", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI",
+   "Retraits non enregistré", "Rendement imposable non enregistré", "Fractionnement (reçu + / cédé −)", "Revenu imposable",
+-  "Impôt", "Récupération de la PSV", "Cotisation CELI", "Cotisation non enregistré", "Solde REER/FERR", "Solde CELI", "Solde non enregistré", "Indice d'inflation (départ = 1)",
++  "Impôt", "Récupération de la PSV", "Cotisation CELI", "Cotisation non enregistré", "Solde REER/FERR", "Solde CELI", "Solde non enregistré", "Indice d'inflation (départ = 1)", "Taux marginal (%)",
+ ];
+ 
+ const csvCell = (v: string | number) => {
+@@ -13,7 +13,7 @@
+ 
+ /**
+  * Détail du plan, une ligne par conjoint et par année, en dollars courants (avec l'inflation).
+- * La dernière colonne permet de revenir aux dollars de l'année de départ : diviser un montant par l'indice.
++ * L'avant-dernière colonne permet de revenir aux dollars de l'année de départ : diviser un montant par l'indice.
+  * Séparateur « ; » et virgule décimale pour Excel en français.
+  */
+ export function planToCsv(s: Scenario, rows: YearResult[]): string {
+@@ -24,7 +24,7 @@
+       lines.push([
+         y.year, s.spouses[i].name, sp.age, sp.alive ? "oui" : "non", sp.pensionIncome, sp.rrqIncome, sp.psvIncome, sp.reerWithdrawal, sp.celiWithdrawal,
+         sp.nonRegWithdrawal, sp.nonRegIncome, sp.pensionSplit, sp.taxableIncome, sp.tax, sp.psvClawback, sp.celiContribution, sp.nonRegContribution,
+-        sp.reerBalanceEnd, sp.celiBalanceEnd, sp.nonRegBalanceEnd, index(y.year),
++        sp.reerBalanceEnd, sp.celiBalanceEnd, sp.nonRegBalanceEnd, index(y.year), (sp.marginalRate * 100).toFixed(2).replace(".", ","),
+       ].map(csvCell).join(";"));
+     });
+   }
+diff -ruN a/ui/src/format.ts b/ui/src/format.ts
+--- a/ui/src/format.ts	2026-09-30 22:07:09.579514424 +0000
++++ b/ui/src/format.ts	2026-09-30 22:07:09.595022593 +0000
+@@ -13,4 +13,7 @@
+   return `${Math.round(x)} $`;
+ }
+ 
++/** Pourcentage à deux décimales : 0.3612 -> « 36,12 % ». */
++export const fmtPct = (x: number) => `${(x * 100).toLocaleString("fr-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
++
+ export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+diff -ruN a/ui/src/main.ts b/ui/src/main.ts
+--- a/ui/src/main.ts	2026-09-30 22:07:09.579562525 +0000
++++ b/ui/src/main.ts	2026-09-30 22:07:09.595503540 +0000
+@@ -289,7 +289,7 @@
+   if (!plan) return `<p class="empty">Calcul en cours…</p>`;
+   const last = plan.rows[plan.rows.length - 1].year;
+   return `<div class="toolbar"><button type="button" class="ghost dark" data-action="export-csv">Exporter en CSV</button></div>
+-    <p class="note">${esc(unitNote(plan.scenario, last))} Pour l'ensemble du couple. Le symbole † indique un décès; les années en rouge manquent de fonds. Le fichier CSV est toujours en dollars courants et contient l'indice d'inflation pour revenir aux dollars de ${esc(String(plan.scenario.assumptions.startYear))}.</p>
++    <p class="note">${esc(unitNote(plan.scenario, last))} Pour l'ensemble du couple. Le symbole † indique un décès; les années en rouge manquent de fonds. Le revenu imposable (après fractionnement et déduction de la PSV récupérée) et le taux marginal sont donnés pour chaque conjoint; le taux marginal est le taux combiné fédéral et Québec du palier d'imposition, sans la récupération de la PSV ni la réduction des crédits. Le fichier CSV est toujours en dollars courants et contient l'indice d'inflation pour revenir aux dollars de ${esc(String(plan.scenario.assumptions.startYear))}.</p>
+     <div class="tall">${yearTable(plan.scenario, plan.rows, real)}</div>`;
+ }
+ 
+diff -ruN a/ui/src/tables.ts b/ui/src/tables.ts
+--- a/ui/src/tables.ts	2026-09-30 22:07:09.579712450 +0000
++++ b/ui/src/tables.ts	2026-09-30 22:07:09.596919873 +0000
+@@ -1,28 +1,41 @@
+ import type { DeathOrderComparison, Scenario, StrategySummary, YearResult } from "../../src/index";
+-import { esc, fmtMoney, fmtNum } from "./format";
++import { esc, fmtMoney, fmtNum, fmtPct } from "./format";
+ 
+ const deflate = (s: Scenario, real: boolean) => (year: number, x: number) => (real ? x / Math.pow(1 + s.assumptions.inflation, year - s.assumptions.startYear) : x);
+ 
+-/** Détail du plan, une ligne par année, pour le ménage. */
++/**
++ * Détail du plan, une ligne par année, pour le ménage; le revenu imposable et le taux marginal sont donnés
++ * pour chaque conjoint (l'impôt se calcule par personne). « — » indique un conjoint décédé.
++ */
+ export function yearTable(s: Scenario, rows: YearResult[], real: boolean): string {
+   const d = deflate(s, real);
+   const sum = (y: YearResult, pick: (p: YearResult["spouses"][0]) => number) => y.spouses[0] ? pick(y.spouses[0]) + pick(y.spouses[1]) : 0;
+-  const head = ["Année", "Âges", "Rentes de régimes", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI et non enr.", "Impôt", "PSV récupérée", "Pension fractionnée", "Dépenses visées", "Manque", "Solde REER/FERR", "Solde CELI", "Solde non enr."];
++  const [n0, n1] = s.spouses.map((x) => x.name);
++  const head: { label: string; sub?: string }[] = [
++    { label: "Année" }, { label: "Âges" }, { label: "Rentes de régimes" }, { label: "RRQ" }, { label: "PSV" }, { label: "Retraits REER/FERR" },
++    { label: "Retraits CELI et non enr." }, { label: "Impôt" }, { label: "PSV récupérée" }, { label: "Pension fractionnée" },
++    { label: "Revenu imposable", sub: n0 }, { label: "Revenu imposable", sub: n1 }, { label: "Taux marginal", sub: n0 }, { label: "Taux marginal", sub: n1 },
++    { label: "Dépenses visées" }, { label: "Manque" }, { label: "Solde REER/FERR" }, { label: "Solde CELI" }, { label: "Solde non enr." },
++  ];
++  const taxable = (y: YearResult, i: 0 | 1) => (y.spouses[i].alive ? d(y.year, y.spouses[i].taxableIncome) : "—");
++  const marginal = (y: YearResult, i: 0 | 1) => (y.spouses[i].alive ? fmtPct(y.spouses[i].marginalRate) : "—");
+   const body = rows.map((y) => {
+     const ages = y.spouses.map((p) => (p.alive ? String(p.age) : "†")).join(" / ");
+     const split = Math.max(y.spouses[0].pensionSplit, y.spouses[1].pensionSplit);
+-    const cells = [
++    const cells: (string | number)[] = [
+       String(y.year), ages,
+       d(y.year, sum(y, (p) => p.pensionIncome)), d(y.year, sum(y, (p) => p.rrqIncome)), d(y.year, sum(y, (p) => p.psvIncome)),
+       d(y.year, sum(y, (p) => p.reerWithdrawal)),
+       d(y.year, sum(y, (p) => p.celiWithdrawal + p.nonRegWithdrawal)), d(y.year, sum(y, (p) => p.tax)), d(y.year, sum(y, (p) => p.psvClawback)),
+-      d(y.year, split), d(y.year, y.targetSpending), d(y.year, y.shortfall),
++      d(y.year, split), taxable(y, 0), taxable(y, 1), marginal(y, 0), marginal(y, 1),
++      d(y.year, y.targetSpending), d(y.year, y.shortfall),
+       d(y.year, sum(y, (p) => p.reerBalanceEnd)), d(y.year, sum(y, (p) => p.celiBalanceEnd)), d(y.year, sum(y, (p) => p.nonRegBalanceEnd)),
+     ];
+     const cls = y.shortfall > 1 ? ' class="short"' : "";
+     return `<tr${cls}>${cells.map((c, i) => (i < 2 ? `<th scope="row"${i === 1 ? ' class="ages"' : ""}>${esc(String(c))}</th>` : `<td>${typeof c === "number" ? fmtNum(c) : esc(c)}</td>`)).join("")}</tr>`;
+   });
+-  return `<div class="scroll"><table class="data year"><thead><tr>${head.map((h, i) => `<th scope="col"${i > 1 ? ' class="num"' : ""}>${esc(h)}</th>`).join("")}</tr></thead><tbody>${body.join("")}</tbody></table></div>`;
++  const th = (h: { label: string; sub?: string }, i: number) => `<th scope="col"${i > 1 ? ' class="num"' : ""}>${esc(h.label)}${h.sub ? `<span class="sub">${esc(h.sub)}</span>` : ""}</th>`;
++  return `<div class="scroll"><table class="data year"><thead><tr>${head.map(th).join("")}</tr></thead><tbody>${body.join("")}</tbody></table></div>`;
+ }
+ 
+ /** Regroupe les lignes dont la clé est identique : garde la première et compte les équivalentes. */
+diff -ruN a/ui/styles.css b/ui/styles.css
+--- a/ui/styles.css	2026-09-30 22:07:09.579805391 +0000
++++ b/ui/styles.css	2026-09-30 22:07:09.597707964 +0000
+@@ -174,6 +174,14 @@
+ .data th.ages { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+ .data.year tbody th[scope="row"] { min-width: 0; white-space: nowrap; }
+ .data.year { font-size: 12px; }
++.data th .sub { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
++.data tr.short { --row-bg: #f8e6e2; }
++.data tbody tr:hover { --row-bg: #eef3ef; }
++.data.year thead th:nth-child(-n+2), .data.year tbody th:nth-child(-n+2) { position: sticky; }
++.data.year thead th:nth-child(-n+2) { z-index: 3; }
++.data.year tbody th:nth-child(-n+2) { z-index: 2; background: var(--row-bg, var(--panel)); }
++.data.year thead th:nth-child(1), .data.year tbody th:nth-child(1) { left: 0; min-width: 60px; }
++.data.year thead th:nth-child(2), .data.year tbody th:nth-child(2) { left: 60px; min-width: 66px; }
+ .data tr.short td, .data tr.short th { background: #f8e6e2; }
+ .data tr.best td, .data tr.best th { background: #e3f0ec; }
+ .data tr.best th { box-shadow: inset 3px 0 0 var(--action); font-weight: 600; }
