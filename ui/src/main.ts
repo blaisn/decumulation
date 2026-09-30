@@ -10,13 +10,12 @@ import { renderForm, setPath } from "./form";
 import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, strategyToForm, toScenario } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
 import { openScenarioFile, saveFile } from "./platform";
-import { KEYS, migrateLegacyKeys } from "./storage-migration";
 import { deathBestTable, deathMatrix, deathRankTable, strategiesTable, yearTable } from "./tables";
 
-try { migrateLegacyKeys(localStorage); } catch { /* stockage indisponible */ }
-const STORE_KEY = KEYS.form;
-const BASE_KEY = KEYS.base;
-const PREFS_KEY = KEYS.prefs;
+// Clés du stockage local (formulaire, données de base, préférences).
+const STORE_KEY = "decumulation.form.v1";
+const BASE_KEY = "decumulation.base.v1";
+const PREFS_KEY = "decumulation.prefs.v1";
 type Tab = "plan" | "detail" | "compare" | "strategies" | "deaths";
 
 // ---------------------------------------------------------------- état

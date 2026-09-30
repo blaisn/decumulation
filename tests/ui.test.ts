@@ -7,7 +7,6 @@ import { planToCsv } from "../ui/src/csv";
 import { balancesChart, sourcesChart } from "../ui/src/charts";
 import { strategiesTable, yearTable } from "../ui/src/tables";
 import { comparePanel } from "../ui/src/compare-view";
-import { KEYS, migrateLegacyKeys } from "../ui/src/storage-migration";
 import { deathMatrix, deathRankTable } from "../ui/src/tables";
 import { compareLongevity } from "../src/index";
 import { summarize } from "../src/index";
@@ -280,42 +279,12 @@ describe("espérance de vie et comparaison des durées de vie", () => {
   });
 });
 
-describe("changement de nom : migration des données", () => {
-  const fake = (init: Record<string, string> = {}) => {
-    const m = new Map(Object.entries(init));
-    return { m, getItem: (k: string) => (m.has(k) ? m.get(k)! : null), setItem: (k: string, v: string) => { m.set(k, v); }, removeItem: (k: string) => { m.delete(k); } };
-  };
-  it("copie les anciennes clés vers les nouvelles, puis les supprime", () => {
-    const st = fake({ "retraite-planner.form.v1": "F", "retraite-planner.base.v1": "B", "retraite-planner.prefs.v1": "P" });
-    const moved = migrateLegacyKeys(st);
-    expect(moved.length).toBe(3);
-    expect(st.getItem(KEYS.form)).toBe("F");
-    expect(st.getItem(KEYS.base)).toBe("B");
-    expect(st.getItem(KEYS.prefs)).toBe("P");
-    expect([...st.m.keys()].some((k) => k.startsWith("retraite-planner."))).toBe(false);
-  });
-  it("ne remplace pas une nouvelle clé déjà présente", () => {
-    const st = fake({ "retraite-planner.form.v1": "ancien", [KEYS.form]: "récent" });
-    expect(migrateLegacyKeys(st)).toEqual([]);
-    expect(st.getItem(KEYS.form)).toBe("récent");
-    expect(st.getItem("retraite-planner.form.v1")).toBe(null);
-  });
-  it("ne fait rien sans anciennes clés, et deux appels donnent le même résultat", () => {
-    const st = fake({ [KEYS.form]: "x" });
-    expect(migrateLegacyKeys(st)).toEqual([]);
-    const old = fake({ "retraite-planner.form.v1": "F" });
-    migrateLegacyKeys(old);
-    expect(migrateLegacyKeys(old)).toEqual([]);
-    expect(old.getItem(KEYS.form)).toBe("F");
-  });
-  it("tolère un stockage qui échoue", () => {
-    const broken = { getItem: () => { throw new Error("indisponible"); }, setItem: () => {}, removeItem: () => {} };
-    expect(migrateLegacyKeys(broken)).toEqual([]);
-  });
-  it("un fichier de scénario enregistré sous l'ancien nom s'ouvre toujours", () => {
-    const legacy = JSON.stringify({ application: "retraite-planner", form: { ...defaultForm(), spending: "88000" } });
-    expect(fileFromJson(legacy).form.spending).toBe("88000");
+describe("fichiers de scénario", () => {
+  it("le champ « application » est écrit à l'enregistrement mais pas exigé à l'ouverture", () => {
     expect(JSON.parse(fileToJson(defaultForm(), null)).application).toBe("decumulation");
+    const other = JSON.stringify({ application: "autre", form: { ...defaultForm(), spending: "88000" } });
+    expect(fileFromJson(other).form.spending).toBe("88000");
+    const none = JSON.stringify({ form: { ...defaultForm(), spending: "77000" } });
+    expect(fileFromJson(none).form.spending).toBe("77000");
   });
 });
-

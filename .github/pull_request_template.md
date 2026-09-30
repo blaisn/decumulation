@@ -24,7 +24,7 @@
 ## Données des utilisateurs
 
 - [ ] Le format des fichiers de scénario et du stockage local reste compatible
-- [ ] Sinon : une migration est incluse et testée (voir `ui/src/storage-migration.ts` et `electron/migrate.ts`)
+- [ ] Sinon : une migration des données existantes est incluse et testée, ou la PR explique pourquoi elle est inutile
 
 ## Notes pour la relecture
 

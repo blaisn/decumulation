@@ -4,7 +4,7 @@ Plan de décaissement pour couple de retraités au Québec : moteur de calcul (T
 
 Nom du projet : `decumulation` (paquet npm, identifiant d'application `ca.local.decumulation`, clés de stockage local `decumulation.*`). Les fichiers produits par `npm run dist` portent un nom sans accent : `Decumulation-installateur-<version>.exe` et `Decumulation-portable-<version>.exe`.
 
-**Données de l'application** : sous Windows, dans `%APPDATA%\Decumulation` (dossier fixé dans `electron/main.ts`). Le projet s'appelait auparavant `retraite-planner` : au premier lancement, `electron/migrate.ts` copie le stockage local de l'ancien dossier (`retraite-planner`, `Plan de décaissement` ou `Décumulation`, le plus récemment utilisé) et `ui/src/storage-migration.ts` renomme les anciennes clés. Les fichiers de scénario enregistrés avant le changement de nom s'ouvrent toujours. La copie utilise des primitives de base (`copyDirSync`) et non `fs.cpSync` : avec Node 22 et plus, `cpSync` récursif peut faire planter le processus sur les chemins Windows accentués (nodejs/node#54476), ce qui arrive avec un nom d'utilisateur comme « Hélène ». Un test vérifie que `cpSync` et `rmSync` ne reviennent pas dans ces fichiers. Si une version installée sous l'ancien identifiant existe, désinstallez-la : le nouvel installateur s'installe à côté.
+**Données de l'application** : sous Windows, dans `%APPDATA%\Decumulation` (dossier fixé dans `electron/main.ts`, le même avec `npm run start` et avec une version installée ou portable). Elles comprennent le formulaire, les données de base et le choix de l'unité des montants. Pour une vraie sauvegarde, ou pour changer d'ordinateur, utilisez « Enregistrer » : le fichier JSON contient le formulaire et les données de base.
 
 ## Démarrer
     npm install
