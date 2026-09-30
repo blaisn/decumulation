@@ -1,6 +1,10 @@
-# retraite-planner
+# Décumulation
 
-Moteur de calcul (TypeScript) pour un plan de décaissement de couple de retraités au Québec.
+Plan de décaissement pour couple de retraités au Québec : moteur de calcul (TypeScript) et application Windows (Electron).
+
+Nom du projet : `decumulation` (paquet npm, identifiant d'application `ca.local.decumulation`, clés de stockage local `decumulation.*`). Les fichiers produits par `npm run dist` portent un nom sans accent : `Decumulation-installateur-<version>.exe` et `Decumulation-portable-<version>.exe`.
+
+**Données de l'application** : sous Windows, dans `%APPDATA%\Decumulation` (dossier fixé dans `electron/main.ts`). Le projet s'appelait auparavant `retraite-planner` : au premier lancement, `electron/migrate.ts` copie le stockage local de l'ancien dossier (`retraite-planner`, `Plan de décaissement` ou `Décumulation`, le plus récemment utilisé) et `ui/src/storage-migration.ts` renomme les anciennes clés. Les fichiers de scénario enregistrés avant le changement de nom s'ouvrent toujours. Si une version installée sous l'ancien identifiant existe, désinstallez-la : le nouvel installateur s'installe à côté.
 
 ## Démarrer
     npm install
@@ -9,7 +13,22 @@ Moteur de calcul (TypeScript) pour un plan de décaissement de couple de retrait
     npm run dist         # crée l'installateur et la version portable Windows dans release/
     npm run example      # compare les stratégies de retrait sur un couple fictif (console)
 
-`npm run dist` doit être lancé sous Windows pour produire les .exe (installateur NSIS et version portable). Sans icône ni signature de code, Windows affichera un avertissement SmartScreen au premier lancement.
+`npm run dist` doit être lancé sous Windows pour produire les .exe (ou déclenché sur GitHub : voir « Versionnage et intégration continue ») (installateur NSIS et version portable). Sans icône ni signature de code, Windows affichera un avertissement SmartScreen au premier lancement.
+
+## Versionnage et intégration continue
+Première mise en place :
+
+    git init -b main
+    git add . && git commit -m "Version initiale"
+    git remote add origin <url-du-depot>
+    git push -u origin main
+
+Lancez d'abord `npm install` et gardez le `package-lock.json` qu'il crée : la CI l'utilise (`npm ci`) pour des installations reproductibles.
+
+- `.github/workflows/ci.yml` : à chaque pull request et à chaque poussée sur `main`, vérifie les types (`npm run typecheck`), lance les tests (`npm test`) et construit l'application (`npm run build`), sous Linux et sous Windows. Pour bloquer la fusion d'une PR dont la vérification échoue : Settings > Branches > règle de protection de `main` > « Require status checks », puis choisir « Vérifications (ubuntu-latest) » et « Vérifications (windows-latest) » (ces noms n'apparaissent qu'après une première exécution)
+- `.github/workflows/windows-installer.yml` : construit l'installateur et la version portable sous Windows (`npm run dist`) et les conserve 30 jours dans l'onglet Actions. Se lance à la main (Actions > Installateur Windows > Run workflow) ou en poussant une étiquette comme `v0.1.0`. Sans signature de code
+- `.github/pull_request_template.md` : description de PR préremplie (résumé, vérifications, changements de fiscalité ou d'hypothèses, compatibilité des données)
+- `.gitattributes` : fins de ligne LF pour tous les fichiers, afin que les différences restent lisibles quand on travaille sous Windows
 
 ## Structure
 - `src/engine/types.ts` : modèle de données (scénario, résultats)

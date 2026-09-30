@@ -10,11 +10,13 @@ import { renderForm, setPath } from "./form";
 import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, strategyToForm, toScenario } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
 import { openScenarioFile, saveFile } from "./platform";
+import { KEYS, migrateLegacyKeys } from "./storage-migration";
 import { deathBestTable, deathMatrix, deathRankTable, strategiesTable, yearTable } from "./tables";
 
-const STORE_KEY = "retraite-planner.form.v1";
-const BASE_KEY = "retraite-planner.base.v1";
-const PREFS_KEY = "retraite-planner.prefs.v1";
+try { migrateLegacyKeys(localStorage); } catch { /* stockage indisponible */ }
+const STORE_KEY = KEYS.form;
+const BASE_KEY = KEYS.base;
+const PREFS_KEY = KEYS.prefs;
 type Tab = "plan" | "detail" | "compare" | "strategies" | "deaths";
 
 // ---------------------------------------------------------------- état

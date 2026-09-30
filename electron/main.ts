@@ -1,11 +1,16 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { DATA_FOLDER, migrateLegacyData } from "./migrate";
+
+// Dossier de données fixé explicitement : il ne dépend ni du nom du paquet ni du nom du produit.
+app.setPath("userData", path.join(app.getPath("appData"), DATA_FOLDER));
+try { migrateLegacyData(app.getPath("appData")); } catch { /* la migration est facultative */ }
 
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1440, height: 920, minWidth: 1100, minHeight: 680,
-    title: "Plan de décaissement",
+    title: "Décumulation",
     backgroundColor: "#f0f3f0",
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
