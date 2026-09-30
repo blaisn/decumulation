@@ -16,6 +16,7 @@ export interface HouseholdTaxResult {
   incomeAfterSplit: [number, number]; // avant déduction de la récupération de la PSV
   clawback: [number, number]; // récupération fiscale de la PSV (hors impôt)
   splitAmount: [number, number]; // + reçu / − cédé
+  marginal: [number, number]; // taux marginal combiné de chaque conjoint (voir `marginalRate`)
 }
 
 const pair = (a: number[]): [number, number] => [a[0], a[1] ?? 0];
@@ -29,6 +30,16 @@ export function progressiveTax(income: number, brackets: Bracket[]): number {
     prev = upTo ?? Infinity;
   }
   return tax;
+}
+
+/**
+ * Taux marginal statutaire combiné pour un revenu imposable : taux du palier fédéral (après l'abattement du Québec)
+ * plus taux du palier du Québec, pour le prochain dollar gagné. Il ne tient pas compte de la récupération de la PSV
+ * ni de la réduction des montants en raison de l'âge, qui s'ajoutent dans certaines zones de revenu.
+ */
+export function marginalRate(income: number, t: TaxYearTable): number {
+  const rateOf = (bs: Bracket[]) => (bs.find((b) => b.upTo === null || income < b.upTo) ?? bs[bs.length - 1]).rate;
+  return rateOf(t.federal.brackets) * (1 - t.federal.quebecAbatement) + rateOf(t.quebec.brackets);
 }
 
 /** Indexe paliers, montants personnels et seuils par un facteur (inflation cumulée). */
@@ -111,6 +122,7 @@ export function householdTax(p: [Taxpayer, Taxpayer | null], t: TaxYearTable, tr
     federal: pair(federal), quebec: pair(quebec),
     incomeAfterSplit: pair(incomeAfterSplit), clawback: pair(clawback),
     splitAmount: pair(splitAmount),
+    marginal: pair(people.map((x) => marginalRate(x.income, t))),
   };
 }
 

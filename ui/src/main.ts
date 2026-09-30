@@ -289,7 +289,7 @@ function detailPanel(): string {
   if (!plan) return `<p class="empty">Calcul en cours…</p>`;
   const last = plan.rows[plan.rows.length - 1].year;
   return `<div class="toolbar"><button type="button" class="ghost dark" data-action="export-csv">Exporter en CSV</button></div>
-    <p class="note">${esc(unitNote(plan.scenario, last))} Pour l'ensemble du couple. Le symbole † indique un décès; les années en rouge manquent de fonds. Le fichier CSV est toujours en dollars courants et contient l'indice d'inflation pour revenir aux dollars de ${esc(String(plan.scenario.assumptions.startYear))}.</p>
+    <p class="note">${esc(unitNote(plan.scenario, last))} Pour l'ensemble du couple. Le symbole † indique un décès; les années en rouge manquent de fonds. Le revenu imposable (après fractionnement et déduction de la PSV récupérée) et le taux marginal sont donnés pour chaque conjoint; le taux marginal est le taux combiné fédéral et Québec du palier d'imposition, sans la récupération de la PSV ni la réduction des crédits. Le fichier CSV est toujours en dollars courants et contient l'indice d'inflation pour revenir aux dollars de ${esc(String(plan.scenario.assumptions.startYear))}.</p>
     <div class="tall">${yearTable(plan.scenario, plan.rows, real)}</div>`;
 }
 

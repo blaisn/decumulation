@@ -3,7 +3,7 @@ import type { Scenario, YearResult } from "../../src/index";
 const HEADERS = [
   "Année", "Conjoint", "Âge", "En vie", "Rente de régime de retraite", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI",
   "Retraits non enregistré", "Rendement imposable non enregistré", "Fractionnement (reçu + / cédé −)", "Revenu imposable",
-  "Impôt", "Récupération de la PSV", "Cotisation CELI", "Cotisation non enregistré", "Solde REER/FERR", "Solde CELI", "Solde non enregistré", "Indice d'inflation (départ = 1)",
+  "Impôt", "Récupération de la PSV", "Cotisation CELI", "Cotisation non enregistré", "Solde REER/FERR", "Solde CELI", "Solde non enregistré", "Indice d'inflation (départ = 1)", "Taux marginal (%)",
 ];
 
 const csvCell = (v: string | number) => {
@@ -13,7 +13,7 @@ const csvCell = (v: string | number) => {
 
 /**
  * Détail du plan, une ligne par conjoint et par année, en dollars courants (avec l'inflation).
- * La dernière colonne permet de revenir aux dollars de l'année de départ : diviser un montant par l'indice.
+ * L'avant-dernière colonne permet de revenir aux dollars de l'année de départ : diviser un montant par l'indice.
  * Séparateur « ; » et virgule décimale pour Excel en français.
  */
 export function planToCsv(s: Scenario, rows: YearResult[]): string {
@@ -24,7 +24,7 @@ export function planToCsv(s: Scenario, rows: YearResult[]): string {
       lines.push([
         y.year, s.spouses[i].name, sp.age, sp.alive ? "oui" : "non", sp.pensionIncome, sp.rrqIncome, sp.psvIncome, sp.reerWithdrawal, sp.celiWithdrawal,
         sp.nonRegWithdrawal, sp.nonRegIncome, sp.pensionSplit, sp.taxableIncome, sp.tax, sp.psvClawback, sp.celiContribution, sp.nonRegContribution,
-        sp.reerBalanceEnd, sp.celiBalanceEnd, sp.nonRegBalanceEnd, index(y.year),
+        sp.reerBalanceEnd, sp.celiBalanceEnd, sp.nonRegBalanceEnd, index(y.year), (sp.marginalRate * 100).toFixed(2).replace(".", ","),
       ].map(csvCell).join(";"));
     });
   }
