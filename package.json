@@ -2,7 +2,7 @@
   "name": "decumulation",
   "version": "0.1.0",
   "private": true,
-  "description": "Décumulation : plan de décaissement pour couple de retraités (Québec)",
+  "description": "Génère un plan de décaissement pour couple de retraités (Québec)",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
