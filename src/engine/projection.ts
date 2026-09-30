@@ -91,7 +91,7 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
         income: g[i].db + g[i].rrq + g[i].psv + nrIncome[i] + minW[i] + extra[i],
         eligiblePension: g[i].db + (ages[i] >= 65 ? minW[i] + extra[i] : 0),
       }));
-      if (both) return optimizeSplit([tp[0], tp[1]], tax);
+      if (both) return a.pensionSplitting === false ? householdTax([tp[0], tp[1]], tax) : optimizeSplit([tp[0], tp[1]], tax);
       const k = alive[0] ? 0 : 1;
       const r = householdTax([{ ...tp[k], livingAlone: true }, null], tax);
       return k === 0 ? r : swap(r);

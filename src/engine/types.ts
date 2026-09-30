@@ -65,6 +65,7 @@ export interface Assumptions {
   nonRegReturn?: number; // rendement du compte non enregistré (défaut : reerReturn)
   nonRegTaxedShare?: number; // part du rendement imposée chaque année, versée en argent (défaut 0,5)
   celiAnnualLimit?: number; // plafond annuel de cotisation au CELI en $ de startYear (défaut 7 000)
+  pensionSplitting?: boolean; // fractionnement du revenu de pension entre conjoints, optimisé chaque année (défaut true)
   survivorSpendingRatio?: number; // dépenses du survivant / dépenses du couple (défaut 0,75)
   rrqSurvivorCap?: number; // rente RRQ maximale combinée du survivant, $ de startYear (défaut 17 295)
 }

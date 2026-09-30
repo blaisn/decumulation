@@ -81,6 +81,8 @@ export function renderForm(f: FormState, openSecs: Set<string>): string {
     <p class="note">${{ "reer-first": "Les dépenses sont payées par le REER/FERR, puis le compte non enregistré, puis le CELI.", "celi-first": "Le CELI est utilisé en premier, ce qui laisse le REER/FERR croître.", ceiling: "Le REER/FERR est retiré jusqu'au revenu plafond de chaque conjoint. Au-delà, on puise dans le CELI avant de dépasser le plafond.", meltdown: "Chaque année, on retire du REER/FERR jusqu'au plafond, même si les dépenses sont couvertes. Le surplus après impôt va au CELI, puis au compte non enregistré." }[st.kind]}</p>
   </div></details>
   <details class="sec" data-sec="advanced"${o("advanced") ? " open" : ""}><summary>Hypothèses avancées</summary><div class="body"><div class="grid">
+    <label class="check wide"><input type="checkbox" data-path="assumptions.applySplitting"${a.applySplitting ? " checked" : ""}><span>Appliquer le fractionnement du revenu de pension</span></label>
+    <p class="hint wide">Répartit chaque année jusqu'à 50 % de la pension admissible entre les conjoints (quand les deux sont en vie) pour réduire l'impôt et la récupération de la PSV. Décochez pour voir l'effet du fractionnement.</p>
     ${field("Indexation de la RRQ", "assumptions.rrqIndexation", a.rrqIndexation, { suffix: "%" })}
     ${field("Indexation de la PSV", "assumptions.psvIndexation", a.psvIndexation, { suffix: "%" })}
     ${field("Rendement du non enregistré", "assumptions.nonRegReturn", a.nonRegReturn, { suffix: "%" })}

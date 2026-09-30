@@ -45,7 +45,7 @@ Lancez d'abord `npm install` et gardez le `package-lock.json` qu'il crée : la C
 ## Hypothèses actuelles
 - À 65 ans et plus, les retraits du REER sont traités comme des revenus de FERR (admissibles au crédit de pension et au fractionnement)
 - Rentes RPA admissibles au fractionnement à tout âge; RRQ et PSV ne le sont pas
-- Fractionnement optimisé chaque année (0 à 50 %, pas de 1 %), tant que les deux conjoints sont en vie
+- Fractionnement optimisé chaque année (0 à 50 %, pas de 1 %), tant que les deux conjoints sont en vie. Case à cocher « Appliquer le fractionnement du revenu de pension » dans les Hypothèses avancées (cochée par défaut); `assumptions.pensionSplitting` dans le moteur
 - Québec : montants en raison de l'âge, pour personne vivant seule et pour revenus de retraite (1,25 x le revenu, max 3 541 $) mis en commun et réduits une seule fois selon le revenu familial net; montant personnel inutilisé transférable
 - Taux marginal : taux statutaire combiné du palier d'imposition du revenu imposable de chaque conjoint = taux fédéral x (1 − abattement du Québec) + taux du Québec. Il n'inclut ni la récupération de la PSV ni la réduction du montant en raison de l'âge, qui s'ajoutent dans certaines zones de revenu (même convention que la plupart des logiciels de planification)
 - Récupération fiscale de la PSV : 15 % du revenu net au-dessus du seuil (indexé), plafonnée à la PSV reçue, déductible du revenu net; calculée après fractionnement
