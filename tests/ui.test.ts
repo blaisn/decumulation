@@ -7,6 +7,7 @@ import { planToCsv } from "../ui/src/csv";
 import { balancesChart, sourcesChart } from "../ui/src/charts";
 import { strategiesTable, yearTable } from "../ui/src/tables";
 import { comparePanel } from "../ui/src/compare-view";
+import { renderForm } from "../ui/src/form";
 import { deathMatrix, deathRankTable } from "../ui/src/tables";
 import { compareLongevity } from "../src/index";
 import { summarize } from "../src/index";
@@ -256,6 +257,17 @@ describe("comparaison à la base", () => {
     const t = strip(comparePanel({ base: base.v, cur: cur.v, changes: describeChanges(base.form, cur.form), real: true }));
     expect(t).toContain("les fonds s'épuisent en");
   });
+  it("le verdict mentionne la PSV récupérée quand elle change, même si l'impôt sur le revenu baisse", () => {
+    // sans fractionnement, la PSV du conjoint au revenu élevé est en partie récupérée; cette récupération réduit son revenu imposable
+    const pens = (f: ReturnType<typeof defaultForm>) => { f.spouses[0].pensions[0].amount = "55000"; f.spouses[1].pensions[0].amount = "8000"; };
+    const base = view(pens), cur = view((f) => { pens(f); f.assumptions.applySplitting = false; });
+    expect(cur.v.summary.nominal.totalClawback).toBeGreaterThan(base.v.summary.nominal.totalClawback + 1000);
+    expect(cur.v.summary.nominal.totalTax).toBeLessThan(base.v.summary.nominal.totalTax);      // le cas trompeur
+    const t = strip(comparePanel({ base: base.v, cur: cur.v, changes: describeChanges(base.form, cur.form), real: false }));
+    expect(t).toContain("de moins d'impôt");
+    expect(t).toContain("de plus de PSV récupérée par l'impôt");
+    expect(t).toContain("Fractionnement du revenu de pension : oui → non");
+  });
   it("les dollars courants donnent des montants plus élevés que les dollars constants", () => {
     const a = view(() => {});
     const c = comparePanel({ base: a.v, cur: a.v, changes: [], real: true });
@@ -310,5 +322,47 @@ describe("fichiers de scénario", () => {
     expect(fileFromJson(other).form.spending).toBe("88000");
     const none = JSON.stringify({ form: { ...defaultForm(), spending: "77000" } });
     expect(fileFromJson(none).form.spending).toBe("77000");
+  });
+});
+
+describe("case « Appliquer le fractionnement du revenu de pension »", () => {
+  it("est cochée par défaut et se retrouve dans le scénario", () => {
+    const f = defaultForm();
+    expect(f.assumptions.applySplitting).toBe(true);
+    expect(toScenario(f).scenario!.assumptions.pensionSplitting).toBe(true);
+    f.assumptions.applySplitting = false;
+    expect(toScenario(f).scenario!.assumptions.pensionSplitting).toBe(false);
+  });
+  it("apparaît dans les Hypothèses avancées, cochée ou non selon l'état", () => {
+    const f = defaultForm();
+    const on = renderForm(f, new Set(["advanced"]));
+    const box = /<input type="checkbox" data-path="assumptions\.applySplitting"([^>]*)>/.exec(on)!;
+    expect(box[1]).toContain("checked");
+    expect(on).toContain("Appliquer le fractionnement du revenu de pension");
+    f.assumptions.applySplitting = false;
+    const off = /<input type="checkbox" data-path="assumptions\.applySplitting"([^>]*)>/.exec(renderForm(f, new Set(["advanced"])))!;
+    expect(off[1]).not.toContain("checked");
+    // la case est dans la section « Hypothèses avancées », pas ailleurs
+    const adv = on.slice(on.indexOf("Hypothèses avancées"));
+    expect(adv.indexOf("assumptions.applySplitting")).toBeGreaterThan(-1);
+    expect(on.slice(0, on.indexOf("Hypothèses avancées")).includes("assumptions.applySplitting")).toBe(false);
+  });
+  it("un ancien fichier ou une ancienne base sans cette case reprennent la valeur par défaut (cochée)", () => {
+    const old = JSON.parse(JSON.stringify(defaultForm()));
+    delete old.assumptions.applySplitting;
+    expect(formFromJson(JSON.stringify({ form: old })).assumptions.applySplitting).toBe(true);
+    const stored = { ...old, assumptions: { ...old.assumptions, applySplitting: false } };
+    expect(formFromJson(JSON.stringify({ form: stored })).assumptions.applySplitting).toBe(false);
+  });
+  it("l'aller-retour par fichier conserve l'état de la case", () => {
+    const f = defaultForm();
+    f.assumptions.applySplitting = false;
+    expect(fileFromJson(fileToJson(f, null)).form.assumptions.applySplitting).toBe(false);
+  });
+  it("le changement apparaît dans la liste des changements depuis les données de base", () => {
+    const a = defaultForm(), b = JSON.parse(JSON.stringify(a)) as typeof a;
+    b.assumptions.applySplitting = false;
+    expect(describeChanges(a, b)).toEqual(["Fractionnement du revenu de pension : oui → non"]);
+    expect([...changedPaths(a, b)]).toEqual(["assumptions.applySplitting"]);
   });
 });

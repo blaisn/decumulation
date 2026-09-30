@@ -24,13 +24,15 @@ export function comparePanel(a: { base: PlanView; cur: PlanView; changes: string
   const lastB = base.rows[base.rows.length - 1].year, lastC = cur.rows[cur.rows.length - 1].year;
 
   const rel = (d: number, more: string, less: string) => `${fmtMoney(Math.abs(d))} ${d >= 0 ? more : less}`;
-  const dEstate = c.afterTaxEstate - b.afterTaxEstate, dTax = c.totalTax - b.totalTax;
+  const dEstate = c.afterTaxEstate - b.afterTaxEstate, dTax = c.totalTax - b.totalTax, dClaw = c.totalClawback - b.totalClawback;
   let verdict: string;
   if (!changes.length) verdict = "Aucun champ ne diffère des données de base : les deux plans sont identiques.";
   else {
-    verdict = Math.abs(dEstate) < 1 && Math.abs(dTax) < 1
+    // La PSV récupérée est déduite du revenu net : elle peut faire baisser l'impôt sur le revenu tout en coûtant plus cher au total.
+    const claw = Math.abs(dClaw) >= 1 ? `, avec <strong>${rel(dClaw, "de plus", "de moins")}</strong> de PSV récupérée par l'impôt` : "";
+    verdict = Math.abs(dEstate) < 1 && Math.abs(dTax) < 1 && !claw
       ? "Ces changements ne modifient ni l'impôt ni la succession."
-      : `Avec ces changements, il reste <strong>${rel(dEstate, "de plus", "de moins")}</strong> après impôt à la fin, et le couple paie <strong>${rel(dTax, "de plus", "de moins")}</strong> d'impôt sur l'ensemble du plan.`;
+      : `Avec ces changements, il reste <strong>${rel(dEstate, "de plus", "de moins")}</strong> après impôt à la fin, et le couple paie <strong>${rel(dTax, "de plus", "de moins")}</strong> d'impôt sur l'ensemble du plan${claw}.`;
     if (fsC !== undefined && fsB === undefined) verdict += ` <strong>Attention : les fonds s'épuisent en ${fsC}</strong>, alors que les données de base finançaient toutes les années.`;
     else if (fsC === undefined && fsB !== undefined) verdict += ` Les fonds ne s'épuisent plus : dans les données de base, ils manquaient dès ${fsB}.`;
     else if (fsC !== undefined && fsB !== undefined && fsC !== fsB) verdict += ` Les fonds s'épuisent en ${fsC} au lieu de ${fsB}.`;

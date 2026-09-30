@@ -14,6 +14,7 @@ export interface AssumptionsForm {
   startYear: string; endAge: string; inflation: string; rrqIndexation: string; psvIndexation: string;
   reerReturn: string; celiReturn: string; nonRegReturn: string; nonRegTaxedShare: string;
   celiAnnualLimit: string; survivorSpendingRatio: string; rrqSurvivorCap: string;
+  applySplitting: boolean; // fractionnement du revenu de pension (case à cocher)
 }
 export interface FormState {
   version: 1;
@@ -41,7 +42,7 @@ export function defaultForm(): FormState {
     assumptions: {
       startYear: "2026", endAge: "95", inflation: "2", rrqIndexation: "2", psvIndexation: "2",
       reerReturn: "4", celiReturn: "4", nonRegReturn: "4", nonRegTaxedShare: "50",
-      celiAnnualLimit: "7000", survivorSpendingRatio: "75", rrqSurvivorCap: "17295",
+      celiAnnualLimit: "7000", survivorSpendingRatio: "75", rrqSurvivorCap: "17295", applySplitting: true,
     },
     estateTaxRate: "45",
     nonRegTaxRate: "10",
@@ -143,6 +144,7 @@ export function toScenario(f: FormState): Parsed {
       celiAnnualLimit: need("Plafond annuel de cotisation au CELI", a.celiAnnualLimit, { min: 0 }),
       survivorSpendingRatio: pct("Dépenses du survivant", a.survivorSpendingRatio, 150),
       rrqSurvivorCap: need("Plafond de la rente RRQ du survivant", a.rrqSurvivorCap, { min: 0 }),
+      pensionSplitting: a.applySplitting,
     },
   };
   const options: CompareOptions = { estateTaxRate: pct("Impôt présumé sur le REER restant", f.estateTaxRate), nonRegTaxRate: pct("Impôt présumé sur le non enregistré", f.nonRegTaxRate) };
@@ -213,7 +215,7 @@ const KEY_LABELS: Record<string, string> = {
   spending: "Dépenses nettes annuelles", startYear: "Début du plan", endAge: "Fin du plan", inflation: "Inflation",
   survivorSpendingRatio: "Dépenses du survivant", reerReturn: "Rendement du REER/FERR", celiReturn: "Rendement du CELI",
   rrqIndexation: "Indexation de la RRQ", psvIndexation: "Indexation de la PSV", nonRegReturn: "Rendement du non enregistré",
-  nonRegTaxedShare: "Part imposable du rendement", celiAnnualLimit: "Plafond annuel du CELI", rrqSurvivorCap: "Plafond de la RRQ du survivant",
+  nonRegTaxedShare: "Part imposable du rendement", celiAnnualLimit: "Plafond annuel du CELI", rrqSurvivorCap: "Plafond de la RRQ du survivant", applySplitting: "Fractionnement du revenu de pension",
   estateTaxRate: "Impôt présumé sur le REER/FERR restant", nonRegTaxRate: "Impôt présumé sur le non enregistré",
   name: "Prénom", birthYear: "Année de naissance", deathAge: "Âge au décès", lifeExpectancy: "Espérance de vie à 65 ans", reer: "REER/FERR", celi: "CELI", celiRoom: "Droits CELI inutilisés",
   nonReg: "Compte non enregistré", rrqAmount: "RRQ, montant annuel", rrqStartAge: "RRQ, début", psvAmount: "PSV, montant annuel", psvStartAge: "PSV, début",

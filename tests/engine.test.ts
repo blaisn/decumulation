@@ -498,3 +498,43 @@ describe("taux marginal d'imposition", () => {
     expect(rows.find((y) => y.year === 2045)!.spouses[0].alive).toBe(false);
   });
 });
+
+describe("fractionnement du revenu de pension (option)", () => {
+  const person = (name: string, birthYear: number, db: number) => ({
+    name, birthYear,
+    dbPensions: [{ label: "RPA", annualAmount: db, startAge: 62, indexation: 0.02, survivorPct: 0.6 }],
+    rrq: { annualAmount: 14000, startAge: 65 }, psv: { annualAmount: 8700, startAge: 65 }, reer: 600000, celi: 90000, celiRoom: 40000,
+  });
+  const base: Scenario = {
+    spouses: [person("A", 1960, 55000), person("B", 1962, 8000)], targetNetSpending: 100000,
+    assumptions: { startYear: 2026, endAge: 95, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 },
+  };
+  const withOpt = (v?: boolean): Scenario => ({ ...base, assumptions: { ...base.assumptions, pensionSplitting: v } });
+  const cost = (rows: ReturnType<typeof runProjection>) => rows.reduce((sum, y) => sum + y.spouses[0].tax + y.spouses[1].tax + y.spouses[0].psvClawback + y.spouses[1].psvClawback, 0);
+
+  it("l'option est activée par défaut : absente ou true donne exactement le même plan", () => {
+    const a = runProjection(withOpt(undefined), tax), b = runProjection(withOpt(true), tax);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    expect(a.some((y) => y.spouses[0].pensionSplit !== 0)).toBe(true);
+  });
+  it("désactivée : aucun montant n'est fractionné, pour aucune année", () => {
+    const rows = runProjection(withOpt(false), tax);
+    for (const y of rows) y.spouses.forEach((p) => expect(p.pensionSplit).toBe(0));
+  });
+  it("désactiver le fractionnement augmente l'impôt et la récupération de la PSV quand les rentes sont inégales", () => {
+    const avec = cost(runProjection(withOpt(true), tax)), sans = cost(runProjection(withOpt(false), tax));
+    expect(sans).toBeGreaterThan(avec + 10000);
+  });
+  it("le fractionnement désactivé ne change pas la dépense nette atteinte tant que les actifs suffisent", () => {
+    const rows = runProjection(withOpt(false), tax);
+    expect(rows.every((y) => y.shortfall < 1)).toBe(true);
+  });
+  it("après un décès, l'option n'a plus d'effet (le survivant est imposé seul)", () => {
+    const dead = (v: boolean): Scenario => ({ ...withOpt(v), spouses: [{ ...base.spouses[0], deathAge: 70 }, base.spouses[1]] });
+    const a = runProjection(dead(true), tax), b = runProjection(dead(false), tax);
+    const later = (rows: typeof a) => rows.filter((y) => y.year > 2030).map((y) => y.spouses[1].tax);
+    expect(later(a).length).toBeGreaterThan(10);
+    // tant que le survivant est seul, les deux plans ne diffèrent que par l'héritage des années précédentes : ils doivent rester proches
+    expect(Math.abs(later(a)[later(a).length - 1] - later(b)[later(b).length - 1]) / later(a)[later(a).length - 1]).toBeLessThan(0.25);
+  });
+});
