@@ -1,0 +1,32 @@
+{
+  "_note": "Sources: ARC (indexation 2026, 2 %); Revenu Québec, formulaire TP-1015.3 (2026-01) pour les montants du Québec. À VALIDER: seuil de l'âge fédéral (45 522 x 1,02). Phase-out du montant personnel fédéral ignoré (revenus > 181 440 $).",
+  "year": 2026,
+  "federal": {
+    "brackets": [
+      { "upTo": 58523, "rate": 0.14 },
+      { "upTo": 117045, "rate": 0.205 },
+      { "upTo": 181440, "rate": 0.26 },
+      { "upTo": 258482, "rate": 0.29 },
+      { "upTo": null, "rate": 0.33 }
+    ],
+    "basicPersonalAmount": 16452,
+    "creditRate": 0.14,
+    "quebecAbatement": 0.165,
+    "ageAmount": { "max": 9208, "threshold": 46432, "reductionRate": 0.15 },
+    "pensionIncomeAmount": 2000,
+    "psvClawback": { "threshold": 95323, "rate": 0.15 }
+  },
+  "quebec": {
+    "brackets": [
+      { "upTo": 54345, "rate": 0.14 },
+      { "upTo": 108680, "rate": 0.19 },
+      { "upTo": 132245, "rate": 0.24 },
+      { "upTo": null, "rate": 0.2575 }
+    ],
+    "basicPersonalAmount": 18952,
+    "creditRate": 0.14,
+    "ageAmount": { "max": 3986, "threshold": 42955, "reductionRate": 0.1875 },
+    "retirementIncomeAmount": 3541,
+    "livingAloneAmount": 2172
+  }
+}
