@@ -168,6 +168,8 @@ select#states { min-width: 340px; max-width: 100%; height: 34px; padding: 0 9px;
 .s-rpa { fill: var(--c-rpa); background: var(--c-rpa); }
 .s-rrq { fill: var(--c-rrq); background: var(--c-rrq); }
 .s-psv { fill: var(--c-psv); background: var(--c-psv); }
+.chart .s-short { fill: var(--danger); fill-opacity: .22; stroke: var(--danger); stroke-width: 1; stroke-dasharray: 3 2; }
+.sw.s-short { background: rgba(168, 64, 47, .25); border: 1px dashed var(--danger); }
 
 /* ---- tableaux */
 .scroll { overflow: auto; border: 1px solid var(--rule); background: var(--panel); }

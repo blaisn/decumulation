@@ -110,7 +110,38 @@ export function balancesChart(s: Scenario, rows: YearResult[], real: boolean): s
   return `<svg class="chart" viewBox="0 0 ${W} ${height}" role="img" aria-label="${esc(label)}">${life}${body}${tips}</svg>`;
 }
 
-/** D'où vient l'argent chaque année, avec la ligne « dépenses + impôt » : ce qui dépasse est réinvesti. */
+export interface SourcesData {
+  keys: { cls: string; name: string; v: (y: YearResult) => number }[];
+  stacks: number[]; // total des sources d'argent de chaque année (le dessus des colonnes)
+  outflow: number[]; // dépense visée + impôt + PSV récupérée (la ligne), manque compris
+  shortfall: number[]; // manque de chaque année
+  contributions: number[]; // surplus réinvesti (cotisations au CELI et au compte non enregistré)
+}
+
+/**
+ * Données du graphique « D'où vient l'argent ». Identité : colonnes + manque = ligne + surplus réinvesti.
+ * La ligne est la dépense *visée* plus l'impôt, pas la dépense financée : quand l'argent manque, elle passe au-dessus des colonnes.
+ */
+export function sourcesData(s: Scenario, rows: YearResult[], real: boolean): SourcesData {
+  const d = deflate(s, real);
+  const keys: SourcesData["keys"] = [
+    { cls: "s-rpa", name: "Rentes de régimes de retraite", v: (y) => total(y, (p) => p.pensionIncome) },
+    { cls: "s-rrq", name: "RRQ", v: (y) => total(y, (p) => p.rrqIncome) },
+    { cls: "s-psv", name: "PSV", v: (y) => total(y, (p) => p.psvIncome) },
+    { cls: "s-reer", name: "Retraits REER/FERR", v: (y) => total(y, (p) => p.reerWithdrawal) },
+    { cls: "s-nonreg", name: "Non enregistré", v: (y) => total(y, (p) => p.nonRegIncome + p.nonRegWithdrawal) },
+    { cls: "s-celi", name: "Retraits CELI", v: (y) => total(y, (p) => p.celiWithdrawal) },
+  ];
+  return {
+    keys,
+    stacks: rows.map((y) => keys.reduce((a, k) => a + d(y.year, k.v(y)), 0)),
+    outflow: rows.map((y) => d(y.year, y.targetSpending + total(y, (p) => p.tax + p.psvClawback))),
+    shortfall: rows.map((y) => d(y.year, y.shortfall)),
+    contributions: rows.map((y) => d(y.year, total(y, (p) => p.celiContribution + p.nonRegContribution))),
+  };
+}
+
+/** D'où vient l'argent chaque année, avec la ligne « dépenses visées + impôt » : ce qui dépasse est réinvesti, ce qui manque est en rouge. */
 export function sourcesChart(s: Scenario, rows: YearResult[], real: boolean): string {
   if (!rows.length) return "";
   const d = deflate(s, real);
@@ -120,16 +151,7 @@ export function sourcesChart(s: Scenario, rows: YearResult[], real: boolean): st
   const height = top + H + M.b;
   const xs = (year: number) => M.l + ((year - y0) / Math.max(1, y1 - y0)) * PLOT_W;
 
-  const keys = [
-    { cls: "s-rpa", name: "Rentes de régimes de retraite", v: (y: YearResult) => total(y, (p) => p.pensionIncome) },
-    { cls: "s-rrq", name: "RRQ", v: (y: YearResult) => total(y, (p) => p.rrqIncome) },
-    { cls: "s-psv", name: "PSV", v: (y: YearResult) => total(y, (p) => p.psvIncome) },
-    { cls: "s-reer", name: "Retraits REER/FERR", v: (y: YearResult) => total(y, (p) => p.reerWithdrawal) },
-    { cls: "s-nonreg", name: "Non enregistré", v: (y: YearResult) => total(y, (p) => p.nonRegIncome + p.nonRegWithdrawal) },
-    { cls: "s-celi", name: "Retraits CELI", v: (y: YearResult) => total(y, (p) => p.celiWithdrawal) },
-  ];
-  const outflow = rows.map((y) => d(y.year, y.targetSpending - y.shortfall + total(y, (p) => p.tax + p.psvClawback)));
-  const stacks = rows.map((y) => keys.reduce((a, k) => a + d(y.year, k.v(y)), 0));
+  const { keys, stacks, outflow, shortfall } = sourcesData(s, rows, real);
   const max = niceMax(Math.max(...stacks, ...outflow) * 1.04);
   const ys = (v: number) => top + H - (v / max) * H;
   const bw = Math.max(2, (PLOT_W / rows.length) * 0.78);
@@ -146,11 +168,17 @@ export function sourcesChart(s: Scenario, rows: YearResult[], real: boolean): st
       }
       acc += v;
     });
-    body += `<rect class="hit" x="${(xs(y.year) - PLOT_W / rows.length / 2).toFixed(1)}" y="${top}" width="${(PLOT_W / rows.length).toFixed(1)}" height="${H}"><title>${esc(tip)}dépenses + impôt ${esc(fmtNum(outflow[k]))} $</title></rect>`;
+    // Manque : la zone entre le dessus des colonnes et la ligne, quand les dépenses visées ne sont pas toutes financées.
+    if (y.shortfall > 1 && outflow[k] > stacks[k]) {
+      body += `<rect class="s-short" x="${(xs(y.year) - bw / 2).toFixed(1)}" y="${ys(outflow[k]).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, ys(stacks[k]) - ys(outflow[k])).toFixed(1)}"/>`;
+      tip += `MANQUE ${fmtNum(shortfall[k])} $; `;
+    }
+    body += `<rect class="hit" x="${(xs(y.year) - PLOT_W / rows.length / 2).toFixed(1)}" y="${top}" width="${(PLOT_W / rows.length).toFixed(1)}" height="${H}"><title>${esc(tip)}dépenses visées + impôt ${esc(fmtNum(outflow[k]))} $</title></rect>`;
   });
   body += `<polyline class="outflow" fill="none" points="${rows.map((y, k) => `${xs(y.year).toFixed(1)},${ys(outflow[k]).toFixed(1)}`).join(" ")}"/>`;
 
-  const label = `Revenus par source de ${y0} à ${y1}, comparés aux dépenses et à l'impôt.`;
+  const first = rows.find((y) => y.shortfall > 1);
+  const label = `Revenus par source de ${y0} à ${y1}, comparés aux dépenses visées et à l'impôt${first ? `; les dépenses visées ne sont pas toutes financées à partir de ${first.year}` : ""}.`;
   return `<svg class="chart" viewBox="0 0 ${W} ${height}" role="img" aria-label="${esc(label)}">${body}</svg>`;
 }
 
