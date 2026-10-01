@@ -168,7 +168,7 @@ function refreshBase() {
   const date = new Date(base.savedAt).toLocaleDateString("fr-CA", { day: "numeric", month: "long", year: "numeric" });
   const n = list.length;
   baseBar.innerHTML = `<p>Données de base enregistrées le ${esc(date)}. ${n === 0 ? "Aucun changement depuis." : `${n} changement${n > 1 ? "s" : ""} depuis.`}</p>
-    ${n ? `<div class="acts"><button type="button" class="btn" data-action="revert-base">Revenir aux données de base</button><button type="button" class="link" data-action="save-base">Définir comme nouvelle base</button></div>
+    ${n ? `<div class="acts"><button type="button" class="btn" data-action="revert-base">Revenir aux données de base</button><button type="button" class="btn" data-action="save-base">Définir comme données de base</button></div>
     <details class="changes"${changesOpen ? " open" : ""}><summary>Voir les changements</summary><ul>${list.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></details>` : ""}`;
   markChanged(changedPaths(base.form, form));
 }
