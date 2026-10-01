@@ -28,3 +28,19 @@ describe("workflows GitHub", () => {
     expect(existsSync(".github/pull_request_template.md")).toBe(true);
   });
 });
+
+describe("boîtes de dialogue", () => {
+  const dirs = ["ui/src", "electron"];
+  const sources = dirs.flatMap((d) => (existsSync(d) ? readdirSync(d).filter((f) => f.endsWith(".ts")).map((f) => `${d}/${f}`) : []));
+  const code = (f: string) => readFileSync(f, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+
+  it("aucune boîte bloquante du navigateur (confirm, alert, prompt) : sous Electron (Windows), elles font perdre le focus clavier au formulaire", () => {
+    expect(sources.length).toBeGreaterThan(5);
+    for (const f of sources) expect(/\b(window\.)?(confirm|alert|prompt)\s*\(/.test(code(f))).toBe(false);
+  });
+  it("les confirmations passent par la boîte intégrée à la page", () => {
+    const main = code("ui/src/main.ts");
+    expect(main.includes("confirmDialog(")).toBe(true);
+    expect(existsSync("ui/src/dialog.ts")).toBe(true);
+  });
+});
