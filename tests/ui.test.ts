@@ -8,6 +8,7 @@ import { balancesChart, sourcesChart } from "../ui/src/charts";
 import { strategiesTable, yearTable } from "../ui/src/tables";
 import { comparePanel } from "../ui/src/compare-view";
 import { renderForm } from "../ui/src/form";
+import { parsePrefs } from "../ui/src/prefs";
 import { deathMatrix, deathRankTable } from "../ui/src/tables";
 import { compareLongevity } from "../src/index";
 import { summarize } from "../src/index";
@@ -364,5 +365,21 @@ describe("case « Appliquer le fractionnement du revenu de pension »", () => {
     b.assumptions.applySplitting = false;
     expect(describeChanges(a, b)).toEqual(["Fractionnement du revenu de pension : oui → non"]);
     expect([...changedPaths(a, b)]).toEqual(["assumptions.applySplitting"]);
+  });
+});
+
+describe("préférences d'affichage", () => {
+  it("lit les deux préférences et met les valeurs par défaut si elles manquent", () => {
+    expect(parsePrefs('{"real":true,"hideForm":true}')).toEqual({ real: true, hideForm: true });
+    expect(parsePrefs('{"real":false}')).toEqual({ real: false, hideForm: false });
+    expect(parsePrefs(null)).toEqual({ real: false, hideForm: false });
+  });
+  it("une ancienne préférence sans « hideForm » garde l'unité choisie et laisse le formulaire visible", () => {
+    expect(parsePrefs('{"real":true}')).toEqual({ real: true, hideForm: false });
+  });
+  it("ignore les valeurs invalides ou d'un mauvais type", () => {
+    expect(parsePrefs("pas du json")).toEqual({ real: false, hideForm: false });
+    expect(parsePrefs("null")).toEqual({ real: false, hideForm: false });
+    expect(parsePrefs('{"real":"oui","hideForm":1}')).toEqual({ real: false, hideForm: false });
   });
 });

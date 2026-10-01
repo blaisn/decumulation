@@ -10,6 +10,7 @@ import { renderForm, setPath } from "./form";
 import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, strategyToForm, toScenario } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
 import { openScenarioFile, saveFile } from "./platform";
+import { parsePrefs } from "./prefs";
 import { deathBestTable, deathMatrix, deathRankTable, strategiesTable, yearTable } from "./tables";
 
 // Clés du stockage local (formulaire, données de base, préférences).
@@ -24,12 +25,11 @@ let base: BaseSnapshot | null = loadBase();
 let changesOpen = false;
 const openSecs = new Set(["general", "spouse0", "spouse1"]);
 let tab: Tab = "plan";
-/** Dollars constants (true) ou dollars courants avec l'inflation (false, par défaut). */
-let real = loadPrefs();
-function loadPrefs(): boolean {
-  try { return (JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as { real?: boolean }).real === true; } catch { return false; }
-}
-function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify({ real })); } catch { /* stockage indisponible */ } }
+/** Préférences : dollars constants (true) ou courants avec l'inflation (false, par défaut); formulaire masqué ou non. */
+const prefs = (() => { try { return parsePrefs(localStorage.getItem(PREFS_KEY)); } catch { return parsePrefs(null); } })();
+let real = prefs.real;
+let hideForm = prefs.hideForm;
+function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify({ real, hideForm })); } catch { /* stockage indisponible */ } }
 let deathAgesText = "75, 80, 85, 90";
 let deathMode: "longevity" | "first" = "longevity";
 let longevityStates = 5;
@@ -228,6 +228,20 @@ inputs.addEventListener("click", (e) => {
 
 // ---------------------------------------------------------------- résultats
 const TABS: [Tab, string][] = [["plan", "Plan"], ["detail", "Détail annuel"], ["compare", "Comparaison à la base"], ["strategies", "Stratégies"], ["deaths", "Ordre des décès"]];
+// Masquer le formulaire : l'onglet « Détail annuel » prend alors toute la largeur de la fenêtre.
+const splitEl = document.querySelector(".split") as HTMLElement;
+const toggleBtn = document.getElementById("toggle-form") as HTMLButtonElement;
+function applyFormVisibility() {
+  splitEl.classList.toggle("form-hidden", hideForm);
+  inputs.hidden = hideForm;
+  toggleBtn.setAttribute("aria-expanded", String(!hideForm));
+  toggleBtn.querySelector(".lbl")!.textContent = hideForm ? "Afficher le formulaire" : "Masquer le formulaire";
+}
+toggleBtn.addEventListener("click", () => {
+  hideForm = !hideForm;
+  if (hideForm && inputs.contains(document.activeElement)) toggleBtn.focus();   // le focus ne doit pas rester dans un panneau caché
+  savePrefs(); applyFormVisibility();
+});
 const unitsEl = document.getElementById("units") as HTMLElement;
 function renderUnits() {
   const y = esc(form.assumptions.startYear.trim() || "départ");
@@ -377,6 +391,7 @@ function renderPanel() {
   const html = tab === "plan" ? planPanel() : tab === "detail" ? detailPanel() : tab === "compare" ? comparePanelHtml() : tab === "strategies" ? strategiesPanel() : deathsPanel();
   const keep = document.activeElement?.id;
   panel.innerHTML = html + `<p class="disclaimer">Ces projections reposent sur des hypothèses simplifiées. Elles ne remplacent pas l'avis d'un planificateur financier ou d'un fiscaliste.</p>`;
+  panel.className = `panel tab-${tab}`;
   panel.setAttribute("aria-labelledby", `tab-${tab}`);
   if (keep) document.getElementById(keep)?.focus();
 }
@@ -444,6 +459,7 @@ document.getElementById("open")!.addEventListener("click", async () => {
 // ---------------------------------------------------------------- démarrage
 renderTabs();
 renderUnits();
+applyFormVisibility();
 renderInputs();
 renderPanel();
 schedulePlan(0);
