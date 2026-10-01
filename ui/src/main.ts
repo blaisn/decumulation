@@ -7,7 +7,7 @@ import { comparePanel } from "./compare-view";
 import { planToCsv } from "./csv";
 import { esc, fmtMoney } from "./format";
 import { renderForm, setPath } from "./form";
-import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, strategyToForm, toScenario } from "./model";
+import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, shareComplement, strategyToForm, toScenario } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
 import { openScenarioFile, saveFile } from "./platform";
 import { parsePrefs } from "./prefs";
@@ -29,7 +29,8 @@ let tab: Tab = "plan";
 const prefs = (() => { try { return parsePrefs(localStorage.getItem(PREFS_KEY)); } catch { return parsePrefs(null); } })();
 let real = prefs.real;
 let hideForm = prefs.hideForm;
-function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify({ real, hideForm })); } catch { /* stockage indisponible */ } }
+let hideDetailNote = prefs.hideDetailNote;
+function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify({ real, hideForm, hideDetailNote })); } catch { /* stockage indisponible */ } }
 let deathAgesText = "75, 80, 85, 90";
 let deathMode: "longevity" | "first" = "longevity";
 let longevityStates = 5;
@@ -190,6 +191,14 @@ inputs.addEventListener("input", (e) => {
   if (!path) return;
   setPath(form, path, el instanceof HTMLInputElement && el.type === "checkbox" ? el.checked : el.value);
   persist(); markStale();
+  // Le montant à 65 ans, laissé vide, affiche le montant annuel : le suivre quand on le modifie.
+  const pa = /^(spouses\.\d\.pensions\.\d+)\.amount$/.exec(path);
+  if (pa) formBody.querySelector(`[data-path="${pa[1]}.amountAt65"]`)?.setAttribute("placeholder", el.value);
+  // La part du second conjoint est déduite de celle du premier : mise à jour en direct.
+  if (path === "spouses.0.expenseShare") {
+    const other = formBody.querySelector<HTMLInputElement>("[data-share-complement]");
+    if (other) other.value = shareComplement(el.value);
+  }
   const m = /^spouses\.(\d)\.name$/.exec(path);
   if (m) {
     const t = inputs.querySelector(`[data-title="${m[1]}"]`);
@@ -302,8 +311,9 @@ function detailPanel(): string {
   if (planErrors.length) return errorsBlock();
   if (!plan) return `<p class="empty">Calcul en cours…</p>`;
   const last = plan.rows[plan.rows.length - 1].year;
-  return `<div class="toolbar"><button type="button" class="ghost dark" data-action="export-csv">Exporter en CSV</button></div>
-    <p class="note">${esc(unitNote(plan.scenario, last))} Pour l'ensemble du couple. Le symbole † indique un décès; les années en rouge manquent de fonds. Le revenu imposable (après fractionnement et déduction de la PSV récupérée) et le taux marginal sont donnés pour chaque conjoint; le taux marginal est le taux combiné fédéral et Québec du palier d'imposition, sans la récupération de la PSV ni la réduction des crédits. Le fichier CSV est toujours en dollars courants et contient l'indice d'inflation pour revenir aux dollars de ${esc(String(plan.scenario.assumptions.startYear))}.</p>
+  return `<div class="toolbar"><button type="button" class="ghost dark" data-action="export-csv">Exporter en CSV</button>
+      <button type="button" class="link" id="toggle-note" data-action="toggle-note" aria-controls="detail-note" aria-expanded="${!hideDetailNote}">${hideDetailNote ? "Afficher la note" : "Masquer la note"}</button></div>
+    <p class="note" id="detail-note"${hideDetailNote ? " hidden" : ""}>${esc(unitNote(plan.scenario, last))} Pour l'ensemble du couple. Le symbole † indique un décès; les années en rouge manquent de fonds. Le revenu imposable (après fractionnement et déduction de la PSV récupérée) et le taux marginal sont donnés pour chaque conjoint; le taux marginal est le taux combiné fédéral et Québec du palier d'imposition, sans la récupération de la PSV ni la réduction des crédits. Le fichier CSV est toujours en dollars courants et contient l'indice d'inflation pour revenir aux dollars de ${esc(String(plan.scenario.assumptions.startYear))}.</p>
     <div class="tall">${yearTable(plan.scenario, plan.rows, real)}</div>`;
 }
 
@@ -391,7 +401,7 @@ function renderPanel() {
   const html = tab === "plan" ? planPanel() : tab === "detail" ? detailPanel() : tab === "compare" ? comparePanelHtml() : tab === "strategies" ? strategiesPanel() : deathsPanel();
   const keep = document.activeElement?.id;
   panel.innerHTML = html + `<p class="disclaimer">Ces projections reposent sur des hypothèses simplifiées. Elles ne remplacent pas l'avis d'un planificateur financier ou d'un fiscaliste.</p>`;
-  panel.className = `panel tab-${tab}`;
+  panel.className = `panel tab-${tab}${hideDetailNote ? " notes-off" : ""}`;
   panel.setAttribute("aria-labelledby", `tab-${tab}`);
   if (keep) document.getElementById(keep)?.focus();
 }
@@ -409,6 +419,16 @@ panel.addEventListener("click", async (e) => {
   if (!b || (b as HTMLButtonElement).disabled) return;
   const a = b.dataset.action;
   if (a === "save-base-panel") { setBaseFromForm(); renderPanel(); return; }
+  if (a === "toggle-note") {
+    // Sans réafficher le panneau : le tableau garde sa position de défilement.
+    hideDetailNote = !hideDetailNote; savePrefs();
+    const note = document.getElementById("detail-note");
+    if (note) note.hidden = hideDetailNote;
+    panel.classList.toggle("notes-off", hideDetailNote);
+    b.textContent = hideDetailNote ? "Afficher la note" : "Masquer la note";
+    b.setAttribute("aria-expanded", String(!hideDetailNote));
+    return;
+  }
   if (a === "export-csv" && plan) {
     await saveFile(`${fileStem()}-detail.csv`, planToCsv(plan.scenario, plan.rows), "csv");
   } else if (a === "run-strategies" && plan) {

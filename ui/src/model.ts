@@ -1,13 +1,18 @@
-import type { CompareOptions, Scenario, SpouseInput, Strategy } from "../../src/index";
+import type { CompareOptions, DbPension, Scenario, SpouseInput, Strategy } from "../../src/index";
 
 // L'état du formulaire garde les valeurs telles que saisies (texte); la conversion se fait dans `toScenario`.
 
-export interface PensionForm { label: string; amount: string; startAge: string; indexation: string; survivorPct: string }
+export interface PensionForm {
+  label: string; amount: string; startAge: string; indexation: string; survivorPct: string;
+  harmonization: boolean; // harmonisation avec la RRQ à 65 ans (case à cocher)
+  amountAt65: string; // montant à partir de 65 ans; vide = identique au montant annuel
+}
 export interface SpouseForm {
   name: string; birthYear: string; deathAge: string; lifeExpectancy: string;
   reer: string; celi: string; celiRoom: string; nonReg: string;
   rrqAmount: string; rrqStartAge: string; psvAmount: string; psvStartAge: string;
   pensions: PensionForm[];
+  expenseShare?: string; // % des dépenses du couple dont ce conjoint a la charge : saisi pour le premier, déduit (100 − part) pour le second
 }
 export interface StrategyForm { kind: Strategy["kind"]; ceiling: string; usePsvThreshold: boolean; untilAge: string }
 export interface AssumptionsForm {
@@ -26,8 +31,9 @@ export interface FormState {
   strategy: StrategyForm;
 }
 
-const pension = (label: string, amount: string): PensionForm => ({ label, amount, startAge: "62", indexation: "2", survivorPct: "60" });
-const spouse = (name: string, birthYear: string, pensionAmount: string): SpouseForm => ({
+const pension = (label: string, amount: string): PensionForm => ({ label, amount, startAge: "62", indexation: "2", survivorPct: "60", harmonization: false, amountAt65: "" });
+const spouse = (name: string, birthYear: string, pensionAmount: string, expenseShare?: string): SpouseForm => ({
+  ...(expenseShare === undefined ? {} : { expenseShare }),
   name, birthYear, deathAge: "", lifeExpectancy: "21",
   reer: "600000", celi: "90000", celiRoom: "40000", nonReg: "0",
   rrqAmount: "14000", rrqStartAge: "65", psvAmount: "8700", psvStartAge: "65",
@@ -46,9 +52,16 @@ export function defaultForm(): FormState {
     },
     estateTaxRate: "45",
     nonRegTaxRate: "10",
-    spouses: [spouse("Alex", "1960", "45000"), spouse("Sam", "1962", "25000")],
+    spouses: [spouse("Alex", "1960", "45000", "50"), spouse("Sam", "1962", "25000")],
     strategy: { kind: "reer-first", ceiling: "90000", usePsvThreshold: true, untilAge: "" },
   };
+}
+
+/** Part du second conjoint, déduite de celle du premier (« 100 − part »); « — » si la saisie n'est pas valide. */
+export function shareComplement(firstShare: string | undefined): string {
+  const v = parseNumber(firstShare ?? "");
+  if (!Number.isFinite(v) || v < 0 || v > 100) return "—";
+  return (100 - v).toLocaleString("fr-CA", { maximumFractionDigits: 2 });
 }
 
 export function newPension(): PensionForm { return pension("", "0"); }
@@ -83,6 +96,7 @@ export function toScenario(f: FormState): Parsed {
   const endAge = need("Âge de fin du plan", a.endAge, { int: true, min: 60, max: 120 });
   const spending = need("Dépenses nettes annuelles", f.spending, { min: 0 });
   const lifeExpectancy: [number, number] = [21, 21];
+  const share0 = need(`${f.spouses[0].name.trim() || "Conjoint 1"} : part des dépenses du couple`, f.spouses[0].expenseShare ?? "50", { min: 0, max: 100 }) / 100;
 
   const spouses = f.spouses.map((s, i): SpouseInput => {
     const n = s.name.trim() || `Conjoint ${i + 1}`;
@@ -101,13 +115,19 @@ export function toScenario(f: FormState): Parsed {
       nonRegistered: need(L("compte non enregistré"), s.nonReg, { min: 0 }),
       rrq: { annualAmount: need(L("rente RRQ annuelle"), s.rrqAmount, { min: 0 }), startAge: need(L("âge de début de la RRQ"), s.rrqStartAge, { int: true, min: 60, max: 72 }) },
       psv: { annualAmount: need(L("PSV annuelle"), s.psvAmount, { min: 0 }), startAge: need(L("âge de début de la PSV"), s.psvStartAge, { int: true, min: 65, max: 70 }) },
-      dbPensions: s.pensions.map((p, j) => ({
-        label: p.label.trim() || `Rente ${j + 1}`,
-        annualAmount: need(L(`rente ${j + 1}, montant annuel`), p.amount, { min: 0 }),
-        startAge: need(L(`rente ${j + 1}, âge de début`), p.startAge, { int: true, min: 40, max: 100 }),
-        indexation: pct(L(`rente ${j + 1}, indexation`), p.indexation, 20),
-        survivorPct: pct(L(`rente ${j + 1}, part versée au survivant`), p.survivorPct),
-      })),
+      dbPensions: s.pensions.map((p, j): DbPension => {
+        const annualAmount = need(L(`rente ${j + 1}, montant annuel`), p.amount, { min: 0 });
+        const pension: DbPension = {
+          label: p.label.trim() || `Rente ${j + 1}`,
+          annualAmount,
+          startAge: need(L(`rente ${j + 1}, âge de début`), p.startAge, { int: true, min: 40, max: 100 }),
+          indexation: pct(L(`rente ${j + 1}, indexation`), p.indexation, 20),
+          survivorPct: pct(L(`rente ${j + 1}, part versée au survivant`), p.survivorPct),
+        };
+        // Harmonisation RRQ : le montant à 65 ans, par défaut le montant annuel (aucun changement à 65 ans).
+        if (p.harmonization) pension.amountAt65 = p.amountAt65.trim() === "" ? annualAmount : need(L(`rente ${j + 1}, montant à 65 ans`), p.amountAt65, { min: 0 });
+        return pension;
+      }),
     };
   }) as [SpouseInput, SpouseInput];
 
@@ -131,6 +151,7 @@ export function toScenario(f: FormState): Parsed {
   const scenario: Scenario = {
     spouses,
     targetNetSpending: spending,
+    firstSpouseSpendingShare: share0,
     strategy,
     assumptions: {
       startYear, endAge,
@@ -220,6 +241,8 @@ const KEY_LABELS: Record<string, string> = {
   name: "Prénom", birthYear: "Année de naissance", deathAge: "Âge au décès", lifeExpectancy: "Espérance de vie à 65 ans", reer: "REER/FERR", celi: "CELI", celiRoom: "Droits CELI inutilisés",
   nonReg: "Compte non enregistré", rrqAmount: "RRQ, montant annuel", rrqStartAge: "RRQ, début", psvAmount: "PSV, montant annuel", psvStartAge: "PSV, début",
   label: "nom", amount: "montant annuel", startAge: "début", indexation: "indexation", survivorPct: "part au survivant",
+  harmonization: "harmonisation RRQ à 65 ans", amountAt65: "montant à 65 ans",
+  expenseShare: "Part des dépenses du couple",
   kind: "Ordre des retraits", ceiling: "Revenu plafond", usePsvThreshold: "Plafond au seuil de la PSV", untilAge: "Fonte jusqu'à l'âge",
 };
 

@@ -1,14 +1,19 @@
-import type { Assumptions, Scenario, SpouseInput, SpouseYear, Strategy, TaxYearTable, YearResult } from "./types";
+import type { Assumptions, DbPension, Scenario, SpouseInput, SpouseYear, Strategy, TaxYearTable, YearResult } from "./types";
 import { householdTax, indexTable, optimizeSplit, type HouseholdTaxResult } from "./tax";
 import { ferrMinFactor } from "./ferr";
 
 const grow = (rate: number, n: number) => Math.pow(1 + rate, n);
 const RRQ_SURVIVOR_PCT = 0.6;
 
+/** Montant annuel d'une rente à un âge donné : avec l'harmonisation RRQ, le montant à 65 ans remplace le montant annuel dès 65 ans. */
+export function dbAmount(p: DbPension, age: number): number {
+  return p.amountAt65 !== undefined && age >= 65 ? p.amountAt65 : p.annualAmount;
+}
+
 /** Revenus garantis : rentes RPA (admissibles au crédit et au fractionnement), RRQ et PSV. */
 function guaranteedIncome(sp: SpouseInput, age: number, n: number, a: Assumptions) {
   let db = 0, rrq = 0, psv = 0;
-  for (const p of sp.dbPensions) if (age >= p.startAge) db += p.annualAmount * grow(p.indexation, n);
+  for (const p of sp.dbPensions) if (age >= p.startAge) db += dbAmount(p, age) * grow(p.indexation, n);
   if (age >= sp.rrq.startAge) rrq += sp.rrq.annualAmount * grow(a.rrqIndexation, n);
   if (age >= sp.psv.startAge) psv += sp.psv.annualAmount * grow(a.psvIndexation, n);
   return { db, rrq, psv };
@@ -70,13 +75,18 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
     const nrIncome = bal.map((b, i) => (alive[i] ? b.nonReg * nrReturn * nrShare : 0));
     const tax = indexTable(baseTax, infl);
     const target = s.targetNetSpending * infl * (both ? 1 : spendingRatio);
+    // Répartition de la dépense visée : selon la part du premier conjoint tant que les deux vivent, puis tout au survivant.
+    const share0 = Math.min(1, Math.max(0, s.firstSpouseSpendingShare ?? 0.5));
+    const shares = both ? [share0, 1 - share0] : [alive[0] ? 1 : 0, alive[1] ? 1 : 0];
 
     const g = s.spouses.map((sp, i) => {
       if (!alive[i]) return { db: 0, rrq: 0, psv: 0 };
       const own = guaranteedIncome(sp, ages[i], n, a);
       if (both) return own;
       const dec = s.spouses[1 - i]; // survivant : prestations de conjoint survivant
-      for (const p of dec.dbPensions) own.db += p.annualAmount * grow(p.indexation, n) * p.survivorPct;
+      // Rente de survivant : part du montant que touchait le défunt à son âge au décès (après harmonisation s'il avait 65 ans ou plus).
+      const ageAtDeath = dec.deathAge ?? ages[1 - i];
+      for (const p of dec.dbPensions) own.db += dbAmount(p, ageAtDeath) * grow(p.indexation, n) * p.survivorPct;
       const cap = rrqCap * grow(a.rrqIndexation, n);
       const combined = own.rrq + RRQ_SURVIVOR_PCT * dec.rrq.annualAmount * grow(a.rrqIndexation, n);
       own.rrq = Math.max(own.rrq, Math.min(combined, cap));
@@ -189,6 +199,7 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
       taxableIncome: r.incomeAfterSplit[i] - r.clawback[i], psvClawback: r.clawback[i], pensionSplit: r.splitAmount[i], tax: r.tax[i],
       reerBalanceEnd: bal[i].reer, celiBalanceEnd: bal[i].celi,
       nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
+      spending: target * shares[i], spendingShare: shares[i],
       marginalRate: alive[i] ? r.marginal[i] : 0,
     })) as [SpouseYear, SpouseYear];
 

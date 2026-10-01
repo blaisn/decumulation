@@ -9,6 +9,7 @@ import { strategiesTable, yearTable } from "../ui/src/tables";
 import { comparePanel } from "../ui/src/compare-view";
 import { renderForm } from "../ui/src/form";
 import { parsePrefs } from "../ui/src/prefs";
+import { shareComplement } from "../ui/src/model";
 import { deathMatrix, deathRankTable } from "../ui/src/tables";
 import { compareLongevity } from "../src/index";
 import { summarize } from "../src/index";
@@ -69,7 +70,7 @@ describe("formulaire vers scénario", () => {
 describe("fichiers de scénario", () => {
   it("l'enregistrement puis l'ouverture redonnent le même formulaire", () => {
     const f = defaultForm();
-    f.spouses[0].pensions.push({ label: "Autre", amount: "1000", startAge: "65", indexation: "0", survivorPct: "0" });
+    f.spouses[0].pensions.push({ label: "Autre", amount: "1000", startAge: "65", indexation: "0", survivorPct: "0", harmonization: false, amountAt65: "" });
     f.spouses[1].deathAge = "85";
     expect(formFromJson(formToJson(f))).toEqual(f);
   });
@@ -99,9 +100,11 @@ describe("export et affichage", () => {
     expect(csv.trim().split("\r\n").length).toBe(1 + rows.length * 2);
     expect(has(csv, '"<b>""Alex""</b>"')).toBe(true); // guillemets échappés
     const head = csv.split("\r\n")[0].split(";");
-    expect(head.length).toBe(22);
+    expect(head.length).toBe(24);
     expect(head[20]).toBe("Indice d'inflation (départ = 1)");    // les 21 premières colonnes n'ont pas bougé
     expect(head[21]).toBe("Taux marginal (%)");
+    expect(head[22]).toBe("Dépenses visées");                      // colonnes ajoutées à la fin : les 22 premières n'ont pas bougé
+    expect(head[23]).toBe("Part des dépenses (%)");
     const first = csv.split("\r\n")[1].split(";");
     expect(first[20]).toBe("1,0000");                              // indice d'inflation de l'année de départ
     expect(first[21]).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
@@ -202,10 +205,10 @@ describe("données de base", () => {
   });
   it("signale une rente ajoutée ou retirée une seule fois", () => {
     const f = defaultForm(), g = clone(f);
-    g.spouses[1].pensions.push({ label: "Autre", amount: "500", startAge: "65", indexation: "0", survivorPct: "0" });
+    g.spouses[1].pensions.push({ label: "Autre", amount: "500", startAge: "65", indexation: "0", survivorPct: "0", harmonization: false, amountAt65: "" });
     expect(describeChanges(f, g)).toEqual(["Sam : rente 2 ajoutée"]);
     expect(describeChanges(g, f)).toEqual(["Sam : rente 2 retirée"]);
-    expect(changedPaths(f, g).size).toBe(5);
+    expect(changedPaths(f, g).size).toBe(7);   // les 5 champs d'une rente + la case d'harmonisation et le montant à 65 ans
   });
   it("le nom de la stratégie est lisible", () => {
     const f = defaultForm(), g = clone(f);
@@ -369,17 +372,174 @@ describe("case « Appliquer le fractionnement du revenu de pension »", () => {
 });
 
 describe("préférences d'affichage", () => {
-  it("lit les deux préférences et met les valeurs par défaut si elles manquent", () => {
-    expect(parsePrefs('{"real":true,"hideForm":true}')).toEqual({ real: true, hideForm: true });
-    expect(parsePrefs('{"real":false}')).toEqual({ real: false, hideForm: false });
-    expect(parsePrefs(null)).toEqual({ real: false, hideForm: false });
+  const ALL_OFF = { real: false, hideForm: false, hideDetailNote: false };
+  it("lit les trois préférences et met les valeurs par défaut si elles manquent", () => {
+    expect(parsePrefs('{"real":true,"hideForm":true,"hideDetailNote":true}')).toEqual({ real: true, hideForm: true, hideDetailNote: true });
+    expect(parsePrefs('{"real":false}')).toEqual(ALL_OFF);
+    expect(parsePrefs(null)).toEqual(ALL_OFF);
   });
-  it("une ancienne préférence sans « hideForm » garde l'unité choisie et laisse le formulaire visible", () => {
-    expect(parsePrefs('{"real":true}')).toEqual({ real: true, hideForm: false });
+  it("une ancienne préférence garde ce qu'elle contient et laisse le reste visible", () => {
+    expect(parsePrefs('{"real":true}')).toEqual({ ...ALL_OFF, real: true });
+    expect(parsePrefs('{"real":true,"hideForm":true}')).toEqual({ real: true, hideForm: true, hideDetailNote: false });
+  });
+  it("chaque préférence est indépendante des autres", () => {
+    expect(parsePrefs('{"hideDetailNote":true}')).toEqual({ ...ALL_OFF, hideDetailNote: true });
+    expect(parsePrefs('{"hideForm":true}')).toEqual({ ...ALL_OFF, hideForm: true });
   });
   it("ignore les valeurs invalides ou d'un mauvais type", () => {
-    expect(parsePrefs("pas du json")).toEqual({ real: false, hideForm: false });
-    expect(parsePrefs("null")).toEqual({ real: false, hideForm: false });
-    expect(parsePrefs('{"real":"oui","hideForm":1}')).toEqual({ real: false, hideForm: false });
+    expect(parsePrefs("pas du json")).toEqual(ALL_OFF);
+    expect(parsePrefs("null")).toEqual(ALL_OFF);
+    expect(parsePrefs('{"real":"oui","hideForm":1,"hideDetailNote":"true"}')).toEqual(ALL_OFF);
+  });
+});
+
+describe("harmonisation RRQ à 65 ans dans le formulaire", () => {
+  const withPension = (mutate: (p: ReturnType<typeof defaultForm>["spouses"][0]["pensions"][0]) => void) => {
+    const f = defaultForm(); mutate(f.spouses[0].pensions[0]); return f;
+  };
+  it("désactivée par défaut : aucun montant à 65 ans dans le scénario", () => {
+    const f = defaultForm();
+    expect(f.spouses[0].pensions[0].harmonization).toBe(false);
+    expect(toScenario(f).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(undefined);
+  });
+  it("cochée avec le montant vide : le montant à 65 ans est le montant annuel", () => {
+    const f = withPension((p) => { p.harmonization = true; });
+    expect(toScenario(f).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(45000);
+    const g = withPension((p) => { p.harmonization = true; p.amount = "52000"; });
+    expect(toScenario(g).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(52000);     // suit le montant annuel
+  });
+  it("cochée avec un montant : il est utilisé; décochée, il est ignoré", () => {
+    const f = withPension((p) => { p.harmonization = true; p.amountAt65 = "38 500,50"; });
+    expect(toScenario(f).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(38500.5);
+    const g = withPension((p) => { p.harmonization = false; p.amountAt65 = "38500"; });
+    expect(toScenario(g).scenario!.spouses[0].dbPensions[0].amountAt65).toBe(undefined);
+  });
+  it("valide le montant à 65 ans, avec le prénom et le numéro de la rente", () => {
+    const bad = toScenario(withPension((p) => { p.harmonization = true; p.amountAt65 = "abc"; }));
+    expect(bad.errors.some((e) => e.includes("Alex : rente 1, montant à 65 ans"))).toBe(true);
+    const neg = toScenario(withPension((p) => { p.harmonization = true; p.amountAt65 = "-5"; }));
+    expect(neg.errors.some((e) => e.includes("montant à 65 ans"))).toBe(true);
+    // décochée, un texte invalide n'est pas signalé
+    expect(toScenario(withPension((p) => { p.amountAt65 = "abc"; })).errors).toEqual([]);
+  });
+  it("le formulaire montre la case, et le champ du montant seulement quand elle est cochée", () => {
+    const f = defaultForm();
+    const off = renderForm(f, new Set(["spouse0"]));
+    expect(off).toContain('data-path="spouses.0.pensions.0.harmonization"');
+    expect(off).toContain("Harmonisation RRQ à 65 ans");
+    expect(off).not.toContain('data-path="spouses.0.pensions.0.amountAt65"');
+    f.spouses[0].pensions[0].harmonization = true;
+    const on = renderForm(f, new Set(["spouse0"]));
+    expect(/<input type="checkbox" data-path="spouses\.0\.pensions\.0\.harmonization"[^>]*checked/.test(on)).toBe(true);
+    expect(on).toContain("Montant de la pension à 65 ans");
+    expect(/data-path="spouses\.0\.pensions\.0\.amountAt65"[^>]*placeholder="45000"/.test(on)).toBe(true);   // le montant annuel, par défaut
+    expect(on).toContain("Avant 65 ans");
+  });
+  it("suit les changements depuis la base, avec un libellé lisible", () => {
+    const a = defaultForm(), b = JSON.parse(JSON.stringify(a)) as typeof a;
+    b.spouses[0].pensions[0].harmonization = true;
+    b.spouses[0].pensions[0].amountAt65 = "38000";
+    expect(describeChanges(a, b)).toEqual(["Alex, rente 1 (harmonisation RRQ à 65 ans) : non → oui", "Alex, rente 1 (montant à 65 ans) : vide → 38000"]);
+  });
+  it("un ancien fichier, ou une ancienne donnée de base, sans ces champs reprend « non » et le montant vide", () => {
+    const old = JSON.parse(JSON.stringify(defaultForm()));
+    delete old.spouses[0].pensions[0].harmonization; delete old.spouses[0].pensions[0].amountAt65;
+    const back = formFromJson(JSON.stringify({ form: old }));
+    expect(back.spouses[0].pensions[0].harmonization).toBe(false);
+    expect(back.spouses[0].pensions[0].amountAt65).toBe("");
+  });
+  it("l'aller-retour par fichier conserve la case et le montant", () => {
+    const f = withPension((p) => { p.harmonization = true; p.amountAt65 = "36000"; });
+    const back = fileFromJson(fileToJson(f, null)).form.spouses[0].pensions[0];
+    expect(back.harmonization).toBe(true);
+    expect(back.amountAt65).toBe("36000");
+  });
+});
+
+describe("part des dépenses du couple", () => {
+  const lines = (csv: string) => csv.trim().split("\r\n").slice(1).map((l) => l.split(";"));
+  it("le premier conjoint a 50 % par défaut; le second n'a pas de champ saisi", () => {
+    const f = defaultForm();
+    expect(f.spouses[0].expenseShare).toBe("50");
+    expect(f.spouses[1].expenseShare).toBe(undefined);
+    expect(toScenario(f).scenario!.firstSpouseSpendingShare).toBe(0.5);
+  });
+  it("convertit le pourcentage saisi en fraction, virgule décimale comprise", () => {
+    const f = defaultForm();
+    f.spouses[0].expenseShare = "62,5";
+    expect(toScenario(f).scenario!.firstSpouseSpendingShare).toBeCloseTo(0.625, 10);
+    f.spouses[0].expenseShare = "0";
+    expect(toScenario(f).scenario!.firstSpouseSpendingShare).toBe(0);
+    f.spouses[0].expenseShare = "100";
+    expect(toScenario(f).scenario!.firstSpouseSpendingShare).toBe(1);
+  });
+  it("refuse une part invalide ou hors de 0 à 100, avec le prénom", () => {
+    for (const bad of ["abc", "-5", "101", ""]) {
+      const f = defaultForm(); f.spouses[0].expenseShare = bad;
+      const r = toScenario(f);
+      expect(r.scenario).toBe(undefined);
+      expect(r.errors.some((e) => e.includes("Alex : part des dépenses du couple"))).toBe(true);
+    }
+  });
+  it("shareComplement : 100 moins la part, ou « — » si la saisie n'est pas valide", () => {
+    expect(shareComplement("50")).toBe("50");
+    expect(shareComplement("70")).toBe("30");
+    expect(shareComplement("33,33")).toBe("66,67");
+    expect(shareComplement("0")).toBe("100");
+    expect(shareComplement("100")).toBe("0");
+    for (const bad of ["", "abc", "-1", "120", undefined]) expect(shareComplement(bad)).toBe("—");
+  });
+  it("le formulaire : champ modifiable pour le premier conjoint, lecture seule (sans chemin de saisie) pour le second", () => {
+    const f = defaultForm(); f.spouses[0].expenseShare = "70";
+    const html = renderForm(f, new Set(["spouse0", "spouse1"]));
+    expect(/data-path="spouses\.0\.expenseShare" value="70"/.test(html)).toBe(true);
+    expect(html).not.toContain('data-path="spouses.1.expenseShare"');
+    const ro = /<input type="text" readonly aria-readonly="true" tabindex="-1" data-share-complement value="([^"]*)">/.exec(html)!;
+    expect(ro[1]).toBe("30");
+    expect(html).toContain("affichage seulement");
+    expect(html.split("Part des dépenses du couple dont il a la charge").length - 1).toBe(2);
+  });
+  it("le second conjoint se met à jour avec la part du premier, et indique « — » si elle est invalide", () => {
+    const f = defaultForm(); f.spouses[0].expenseShare = "abc";
+    expect(/data-share-complement value="—"/.test(renderForm(f, new Set(["spouse1"])))).toBe(true);
+  });
+  it("suit les changements depuis la base, avec le prénom", () => {
+    const a = defaultForm(), b = JSON.parse(JSON.stringify(a)) as typeof a;
+    b.spouses[0].expenseShare = "60";
+    expect(describeChanges(a, b)).toEqual(["Alex, part des dépenses du couple : 50 → 60"]);
+  });
+  it("un ancien fichier sans ce champ reprend 50 %; l'aller-retour par fichier le conserve", () => {
+    const old = JSON.parse(JSON.stringify(defaultForm())); delete old.spouses[0].expenseShare;
+    expect(formFromJson(JSON.stringify({ form: old })).spouses[0].expenseShare).toBe("50");
+    const f = defaultForm(); f.spouses[0].expenseShare = "65";
+    expect(fileFromJson(fileToJson(f, null)).form.spouses[0].expenseShare).toBe("65");
+  });
+  it("CSV : la dépense visée et la part de chaque conjoint, qui totalisent la dépense du ménage", () => {
+    const f = defaultForm(); f.spouses[0].expenseShare = "70"; f.spouses[0].deathAge = "";
+    f.spouses[1].deathAge = "";
+    const sc = toScenario(f).scenario!;
+    const rows = runProjection(sc, tax);
+    const csv = lines(planToCsv(sc, rows));
+    const a = csv[0], b = csv[1];                                   // 2026 : Alex puis Sam
+    expect(a[22]).toBe("70000");
+    expect(b[22]).toBe("30000");
+    expect(a[23]).toBe("70,00");
+    expect(b[23]).toBe("30,00");
+    expect(Number(a[22]) + Number(b[22])).toBe(Math.round(rows[0].targetSpending));
+    // en 2030 : indexé à l'inflation, toujours 70 / 30
+    const y = rows.find((r) => r.year === 2030)!;
+    const r2030 = csv.filter((l) => l[0] === "2030");
+    expect(Number(r2030[0][22])).toBe(Math.round(0.7 * y.targetSpending));
+    expect(Number(r2030[1][22])).toBe(Math.round(0.3 * y.targetSpending));
+  });
+  it("CSV après un décès : le survivant a 100 % de la dépense réduite, le défunt 0", () => {
+    const f = defaultForm(); f.spouses[0].expenseShare = "70"; f.spouses[0].deathAge = "80"; f.spouses[1].deathAge = "";
+    const sc = toScenario(f).scenario!;
+    const rows = runProjection(sc, tax);
+    const apres = lines(planToCsv(sc, rows)).filter((l) => l[0] === "2041");        // Alex est né en 1960 : décès fin 2040
+    expect(apres[0][22]).toBe("0");
+    expect(apres[0][23]).toBe("0,00");
+    expect(apres[1][23]).toBe("100,00");
+    expect(Number(apres[1][22])).toBe(Math.round(rows.find((r) => r.year === 2041)!.targetSpending));
   });
 });

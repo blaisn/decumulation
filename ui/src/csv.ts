@@ -4,6 +4,7 @@ const HEADERS = [
   "Année", "Conjoint", "Âge", "En vie", "Rente de régime de retraite", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI",
   "Retraits non enregistré", "Rendement imposable non enregistré", "Fractionnement (reçu + / cédé −)", "Revenu imposable",
   "Impôt", "Récupération de la PSV", "Cotisation CELI", "Cotisation non enregistré", "Solde REER/FERR", "Solde CELI", "Solde non enregistré", "Indice d'inflation (départ = 1)", "Taux marginal (%)",
+  "Dépenses visées", "Part des dépenses (%)",
 ];
 
 const csvCell = (v: string | number) => {
@@ -25,6 +26,7 @@ export function planToCsv(s: Scenario, rows: YearResult[]): string {
         y.year, s.spouses[i].name, sp.age, sp.alive ? "oui" : "non", sp.pensionIncome, sp.rrqIncome, sp.psvIncome, sp.reerWithdrawal, sp.celiWithdrawal,
         sp.nonRegWithdrawal, sp.nonRegIncome, sp.pensionSplit, sp.taxableIncome, sp.tax, sp.psvClawback, sp.celiContribution, sp.nonRegContribution,
         sp.reerBalanceEnd, sp.celiBalanceEnd, sp.nonRegBalanceEnd, index(y.year), (sp.marginalRate * 100).toFixed(2).replace(".", ","),
+        sp.spending, (sp.spendingShare * 100).toFixed(2).replace(".", ","),
       ].map(csvCell).join(";"));
     });
   }

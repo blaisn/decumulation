@@ -34,6 +34,11 @@ export interface DbPension {
   startAge: number;
   indexation: number; // ex. 0.02
   survivorPct: number; // % de la rente versé au survivant (TODO: décès)
+  /**
+   * Harmonisation avec la RRQ : montant annuel à partir de 65 ans, en $ de startYear (comme `annualAmount`, indexé depuis startYear).
+   * `annualAmount` s'applique avant 65 ans. Absent : la rente ne change pas à 65 ans.
+   */
+  amountAt65?: number;
 }
 
 export interface PublicBenefit {
@@ -91,6 +96,12 @@ export type Strategy =
 export interface Scenario {
   spouses: [SpouseInput, SpouseInput];
   targetNetSpending: number; // dépenses nettes du ménage, indexées à l'inflation
+  /**
+   * Part des dépenses du ménage dont le premier conjoint a la charge (0 à 1, défaut 0,5); le second a le reste.
+   * Sert à répartir la dépense visée entre les conjoints dans les résultats; elle ne change pas le financement du ménage.
+   * Après un décès, le survivant a toute la dépense (réduite par `survivorSpendingRatio`).
+   */
+  firstSpouseSpendingShare?: number;
   assumptions: Assumptions;
   strategy?: Strategy; // défaut : reer-first
 }
@@ -115,6 +126,8 @@ export interface SpouseYear {
   celiContribution: number;
   nonRegContribution: number;
   nonRegBalanceEnd: number;
+  spending: number; // part de ce conjoint dans la dépense visée du ménage, en dollars courants (0 si décédé)
+  spendingShare: number; // cette part en fraction de la dépense du ménage (1 pour le survivant, 0 si décédé)
   marginalRate: number; // taux marginal combiné (fédéral après abattement du Québec + Québec) du palier du revenu imposable; 0 si décédé
 }
 
