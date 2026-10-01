@@ -4,7 +4,7 @@ import { runProjection } from "../src/index";
 import type { StrategySummary, TaxYearTable } from "../src/index";
 import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, parseNumber, strategyToForm, toScenario } from "../ui/src/model";
 import { planToCsv } from "../ui/src/csv";
-import { balancesChart, sourcesChart } from "../ui/src/charts";
+import { balancesChart, sourcesChart, sourcesData } from "../ui/src/charts";
 import { strategiesTable, yearTable } from "../ui/src/tables";
 import { comparePanel } from "../ui/src/compare-view";
 import { renderForm } from "../ui/src/form";
@@ -541,5 +541,69 @@ describe("part des dépenses du couple", () => {
     expect(apres[0][23]).toBe("0,00");
     expect(apres[1][23]).toBe("100,00");
     expect(Number(apres[1][22])).toBe(Math.round(rows.find((r) => r.year === 2041)!.targetSpending));
+  });
+});
+
+describe("graphique « D'où vient l'argent » : le manque de fonds", () => {
+  const plan = (spending: string) => {
+    const f = defaultForm(); f.spending = spending;
+    const sc = toScenario(f).scenario!;
+    return { sc, rows: runProjection(sc, tax) };
+  };
+  const SHORT = plan("150000");        // les actifs s'épuisent à partir de 2046
+  const FINE = plan("100000");         // toutes les dépenses sont financées
+
+  it("le scénario d'essai a bien des années en manque, et pas toutes", () => {
+    const years = SHORT.rows.filter((y) => y.shortfall > 1).map((y) => y.year);
+    expect(years.length).toBeGreaterThan(5);
+    expect(years.length).toBeLessThan(SHORT.rows.length);
+    expect(FINE.rows.every((y) => y.shortfall < 1)).toBe(true);
+  });
+  it("identité des données : colonnes + manque = ligne + surplus réinvesti, chaque année, dollars courants et constants", () => {
+    for (const { sc, rows } of [SHORT, FINE]) for (const real of [false, true]) {
+      const d = sourcesData(sc, rows, real);
+      rows.forEach((_, k) => expect(Math.abs(d.stacks[k] + d.shortfall[k] - d.outflow[k] - d.contributions[k])).toBeLessThan(1e-6));
+    }
+  });
+  it("en manque, la ligne passe au-dessus des colonnes d'exactement le manque (c'était le bogue : elle les suivait)", () => {
+    const d = sourcesData(SHORT.sc, SHORT.rows, false);
+    let vus = 0;
+    SHORT.rows.forEach((y, k) => {
+      if (y.shortfall > 1) {
+        vus++;
+        expect(d.outflow[k] - d.stacks[k]).toBeCloseTo(y.shortfall, 4);
+        expect(d.outflow[k]).toBeGreaterThan(d.stacks[k] + 1);
+        expect(d.contributions[k]).toBe(0);
+      }
+    });
+    expect(vus).toBeGreaterThan(5);
+  });
+  it("la ligne représente la dépense visée : elle ne soustrait jamais le manque", () => {
+    const d = sourcesData(SHORT.sc, SHORT.rows, false);
+    const y = SHORT.rows[SHORT.rows.length - 1];
+    const k = SHORT.rows.length - 1;
+    expect(d.outflow[k]).toBeCloseTo(y.targetSpending + y.spouses[0].tax + y.spouses[1].tax + y.spouses[0].psvClawback + y.spouses[1].psvClawback, 4);
+  });
+  it("sans manque, la ligne ne dépasse jamais les colonnes (l'excédent est réinvesti)", () => {
+    const d = sourcesData(FINE.sc, FINE.rows, false);
+    FINE.rows.forEach((_, k) => expect(d.stacks[k]).toBeGreaterThanOrEqual(d.outflow[k] - 1e-6));
+  });
+  it("une zone rouge par année en manque, et seulement celles-là", () => {
+    const n = SHORT.rows.filter((y) => y.shortfall > 1).length;
+    const svg = sourcesChart(SHORT.sc, SHORT.rows, false);
+    expect(svg.split('class="s-short"').length - 1).toBe(n);
+    expect(svg).toContain("MANQUE");
+    expect(svg).toContain("les dépenses visées ne sont pas toutes financées à partir de 2046");
+    const fine = sourcesChart(FINE.sc, FINE.rows, false);
+    expect(fine.split('class="s-short"').length - 1).toBe(0);
+    expect(fine).not.toContain("MANQUE");
+    expect(fine).not.toContain("pas toutes financées");
+  });
+  it("la zone rouge relie le dessus des colonnes à la ligne (hauteur proportionnelle au manque)", () => {
+    const svg = sourcesChart(SHORT.sc, SHORT.rows, false);
+    const hs = [...svg.matchAll(/class="s-short" [^>]*height="([\d.]+)"/g)].map((m) => Number(m[1]));
+    expect(hs.length).toBeGreaterThan(5);
+    expect(hs.every((h) => h > 0)).toBe(true);
+    expect(hs[hs.length - 1]).toBeGreaterThan(hs[0]);     // le manque grandit à mesure que les actifs s'épuisent
   });
 });

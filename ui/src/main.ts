@@ -302,9 +302,9 @@ function planPanel(): string {
     ${legend(BALANCE_LEGEND)}
     ${balancesChart(s, rows, real)}
     <h2>D'où vient l'argent</h2>
-    ${legend(SOURCE_LEGEND, `<li><span class="sw line"></span>Dépenses et impôt</li>`)}
+    ${legend(SOURCE_LEGEND, `<li><span class="sw line"></span>Dépenses visées et impôt</li>${first ? `<li><span class="sw s-short"></span>Manque de fonds</li>` : ""}`)}
     ${sourcesChart(s, rows, real)}
-    <p class="note">Quand les barres dépassent la ligne, l'excédent est réinvesti dans le CELI, puis dans le compte non enregistré.</p>`;
+    <p class="note">Quand les barres dépassent la ligne, l'excédent est réinvesti dans le CELI, puis dans le compte non enregistré.${first ? " Quand la ligne dépasse les barres, la zone rouge est le manque : des dépenses visées ne sont pas financées." : ""}</p>`;
 }
 
 function detailPanel(): string {
