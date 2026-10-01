@@ -9,6 +9,7 @@ import { esc, fmtMoney } from "./format";
 import { renderForm, setPath } from "./form";
 import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, shareComplement, strategyToForm, toScenario } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
+import { confirmDialog } from "./dialog";
 import { openScenarioFile, saveFile } from "./platform";
 import { parsePrefs } from "./prefs";
 import { deathBestTable, deathMatrix, deathRankTable, strategiesTable, yearTable } from "./tables";
@@ -215,22 +216,29 @@ inputs.addEventListener("toggle", (e) => {
   if (key) { if (d.open) openSecs.add(key); else openSecs.delete(key); }
   else if (d.classList.contains("changes")) changesOpen = d.open;
 }, true);
-inputs.addEventListener("click", (e) => {
+inputs.addEventListener("click", async (e) => {
   const b = (e.target as HTMLElement).closest("[data-action]") as HTMLElement | null;
   if (!b) return;
   const i = Number(b.dataset.spouse);
   if (b.dataset.action === "save-base") {
-    if (base && describeChanges(base.form, form).length && !window.confirm("Remplacer les données de base par la situation actuelle ?")) return;
+    const n = base ? describeChanges(base.form, form).length : 0;
+    // Les confirmations sont des boîtes intégrées à la page : window.confirm bloque le focus clavier sous Electron (Windows).
+    if (base && n && !(await confirmDialog({ title: "Définir comme données de base ?", message: "Les données de base actuelles seront remplacées par la situation actuelle. L'ancienne base ne pourra pas être récupérée.", confirmLabel: "Définir comme données de base" }))) return;
     setBaseFromForm(); return;
   }
   if (b.dataset.action === "revert-base") {
-    if (!base || !window.confirm(`Revenir aux données de base ? Les ${describeChanges(base.form, form).length} changements seront perdus.`)) return;
+    if (!base) return;
+    const n = describeChanges(base.form, form).length;
+    if (!(await confirmDialog({ title: "Revenir aux données de base ?", message: `${n === 1 ? "Le changement sera perdu" : `Les ${n} changements seront perdus`} : le formulaire retrouvera les valeurs des données de base.`, confirmLabel: "Revenir aux données de base" }))) return;
     form = structuredClone(base.form);
     persist(); markStale(); renderInputs(); schedulePlan(0); renderPanel(); return;
   }
   if (b.dataset.action === "add-pension") form.spouses[i].pensions.push(newPension());
   else if (b.dataset.action === "remove-pension") form.spouses[i].pensions.splice(Number(b.dataset.index), 1);
-  else if (b.dataset.action === "reset") { if (!window.confirm("Remplacer toutes les données par les valeurs d'exemple ?")) return; form = defaultForm(); }
+  else if (b.dataset.action === "reset") {
+    if (!(await confirmDialog({ title: "Rétablir les valeurs d'exemple ?", message: "Toutes les données du formulaire seront remplacées par les valeurs d'exemple. Les données de base ne sont pas touchées.", confirmLabel: "Rétablir les valeurs d'exemple" }))) return;
+    form = defaultForm();
+  }
   else return;
   persist(); markStale(); renderInputs(); schedulePlan(0); renderPanel();
 });

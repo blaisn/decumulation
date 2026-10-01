@@ -50,6 +50,13 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .results { overflow: auto; min-width: 0; }
 .foot { padding: 14px 18px 0; }
 
+/* ---- boîte de confirmation intégrée */
+dialog.confirm { width: min(440px, calc(100vw - 32px)); padding: 20px 22px; color: var(--ink); background: var(--panel); border: 1px solid var(--field); border-radius: 6px; box-shadow: 0 12px 32px rgba(23, 50, 75, .28); }
+dialog.confirm::backdrop { background: rgba(23, 50, 75, .4); }
+dialog.confirm h2 { margin: 0 0 8px; font: 600 17px/1.25 var(--serif); }
+dialog.confirm p { margin: 0 0 18px; }
+dialog.confirm .buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+
 /* ---- données de base */
 .basebar { position: sticky; top: 0; z-index: 3; padding: 12px 18px; background: #f6f8f6; border-bottom: 1px solid var(--rule); }
 .basebar p { margin: 0 0 6px; font-size: 13px; }
