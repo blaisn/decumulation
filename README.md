@@ -15,6 +15,8 @@ Nom du projet : `decumulation` (paquet npm, identifiant d'application `ca.local.
 
 `npm run dist` doit être lancé sous Windows pour produire les .exe (ou déclenché sur GitHub : voir « Versionnage et intégration continue ») (installateur NSIS et version portable). Sans icône ni signature de code, Windows affichera un avertissement SmartScreen au premier lancement.
 
+**Publier une version** (MSI, installateur, version portable, version GitHub, copie sur S3, site web statique) : voir [docs/PUBLICATION.md](docs/PUBLICATION.md).
+
 ## Versionnage et intégration continue
 Première mise en place :
 

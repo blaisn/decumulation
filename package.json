@@ -34,7 +34,8 @@
     "win": {
       "target": [
         "nsis",
-        "portable"
+        "portable",
+        "msi"
       ]
     },
     "portable": {
@@ -45,6 +46,16 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "msi": {
+      "artifactName": "Decumulation-${version}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "upgradeCode": "A0147A5A-2813-4E31-8B77-BE6200D402EC",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": false,
+      "warningsAsErrors": false
     }
   }
 }
