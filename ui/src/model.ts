@@ -12,6 +12,7 @@ export interface SpouseForm {
   reer: string; celi: string; celiRoom: string; nonReg: string;
   rrqAmount: string; rrqStartAge: string; psvAmount: string; psvStartAge: string;
   pensions: PensionForm[];
+  expenseShare?: string; // % des dépenses du couple dont ce conjoint a la charge : saisi pour le premier, déduit (100 − part) pour le second
 }
 export interface StrategyForm { kind: Strategy["kind"]; ceiling: string; usePsvThreshold: boolean; untilAge: string }
 export interface AssumptionsForm {
@@ -31,7 +32,8 @@ export interface FormState {
 }
 
 const pension = (label: string, amount: string): PensionForm => ({ label, amount, startAge: "62", indexation: "2", survivorPct: "60", harmonization: false, amountAt65: "" });
-const spouse = (name: string, birthYear: string, pensionAmount: string): SpouseForm => ({
+const spouse = (name: string, birthYear: string, pensionAmount: string, expenseShare?: string): SpouseForm => ({
+  ...(expenseShare === undefined ? {} : { expenseShare }),
   name, birthYear, deathAge: "", lifeExpectancy: "21",
   reer: "600000", celi: "90000", celiRoom: "40000", nonReg: "0",
   rrqAmount: "14000", rrqStartAge: "65", psvAmount: "8700", psvStartAge: "65",
@@ -50,9 +52,16 @@ export function defaultForm(): FormState {
     },
     estateTaxRate: "45",
     nonRegTaxRate: "10",
-    spouses: [spouse("Alex", "1960", "45000"), spouse("Sam", "1962", "25000")],
+    spouses: [spouse("Alex", "1960", "45000", "50"), spouse("Sam", "1962", "25000")],
     strategy: { kind: "reer-first", ceiling: "90000", usePsvThreshold: true, untilAge: "" },
   };
+}
+
+/** Part du second conjoint, déduite de celle du premier (« 100 − part »); « — » si la saisie n'est pas valide. */
+export function shareComplement(firstShare: string | undefined): string {
+  const v = parseNumber(firstShare ?? "");
+  if (!Number.isFinite(v) || v < 0 || v > 100) return "—";
+  return (100 - v).toLocaleString("fr-CA", { maximumFractionDigits: 2 });
 }
 
 export function newPension(): PensionForm { return pension("", "0"); }
@@ -87,6 +96,7 @@ export function toScenario(f: FormState): Parsed {
   const endAge = need("Âge de fin du plan", a.endAge, { int: true, min: 60, max: 120 });
   const spending = need("Dépenses nettes annuelles", f.spending, { min: 0 });
   const lifeExpectancy: [number, number] = [21, 21];
+  const share0 = need(`${f.spouses[0].name.trim() || "Conjoint 1"} : part des dépenses du couple`, f.spouses[0].expenseShare ?? "50", { min: 0, max: 100 }) / 100;
 
   const spouses = f.spouses.map((s, i): SpouseInput => {
     const n = s.name.trim() || `Conjoint ${i + 1}`;
@@ -141,6 +151,7 @@ export function toScenario(f: FormState): Parsed {
   const scenario: Scenario = {
     spouses,
     targetNetSpending: spending,
+    firstSpouseSpendingShare: share0,
     strategy,
     assumptions: {
       startYear, endAge,
@@ -231,6 +242,7 @@ const KEY_LABELS: Record<string, string> = {
   nonReg: "Compte non enregistré", rrqAmount: "RRQ, montant annuel", rrqStartAge: "RRQ, début", psvAmount: "PSV, montant annuel", psvStartAge: "PSV, début",
   label: "nom", amount: "montant annuel", startAge: "début", indexation: "indexation", survivorPct: "part au survivant",
   harmonization: "harmonisation RRQ à 65 ans", amountAt65: "montant à 65 ans",
+  expenseShare: "Part des dépenses du couple",
   kind: "Ordre des retraits", ceiling: "Revenu plafond", usePsvThreshold: "Plafond au seuil de la PSV", untilAge: "Fonte jusqu'à l'âge",
 };
 

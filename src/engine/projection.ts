@@ -75,6 +75,9 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
     const nrIncome = bal.map((b, i) => (alive[i] ? b.nonReg * nrReturn * nrShare : 0));
     const tax = indexTable(baseTax, infl);
     const target = s.targetNetSpending * infl * (both ? 1 : spendingRatio);
+    // Répartition de la dépense visée : selon la part du premier conjoint tant que les deux vivent, puis tout au survivant.
+    const share0 = Math.min(1, Math.max(0, s.firstSpouseSpendingShare ?? 0.5));
+    const shares = both ? [share0, 1 - share0] : [alive[0] ? 1 : 0, alive[1] ? 1 : 0];
 
     const g = s.spouses.map((sp, i) => {
       if (!alive[i]) return { db: 0, rrq: 0, psv: 0 };
@@ -196,6 +199,7 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
       taxableIncome: r.incomeAfterSplit[i] - r.clawback[i], psvClawback: r.clawback[i], pensionSplit: r.splitAmount[i], tax: r.tax[i],
       reerBalanceEnd: bal[i].reer, celiBalanceEnd: bal[i].celi,
       nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
+      spending: target * shares[i], spendingShare: shares[i],
       marginalRate: alive[i] ? r.marginal[i] : 0,
     })) as [SpouseYear, SpouseYear];
 

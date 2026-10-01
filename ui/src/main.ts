@@ -7,7 +7,7 @@ import { comparePanel } from "./compare-view";
 import { planToCsv } from "./csv";
 import { esc, fmtMoney } from "./format";
 import { renderForm, setPath } from "./form";
-import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, strategyToForm, toScenario } from "./model";
+import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, shareComplement, strategyToForm, toScenario } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
 import { openScenarioFile, saveFile } from "./platform";
 import { parsePrefs } from "./prefs";
@@ -194,6 +194,11 @@ inputs.addEventListener("input", (e) => {
   // Le montant à 65 ans, laissé vide, affiche le montant annuel : le suivre quand on le modifie.
   const pa = /^(spouses\.\d\.pensions\.\d+)\.amount$/.exec(path);
   if (pa) formBody.querySelector(`[data-path="${pa[1]}.amountAt65"]`)?.setAttribute("placeholder", el.value);
+  // La part du second conjoint est déduite de celle du premier : mise à jour en direct.
+  if (path === "spouses.0.expenseShare") {
+    const other = formBody.querySelector<HTMLInputElement>("[data-share-complement]");
+    if (other) other.value = shareComplement(el.value);
+  }
   const m = /^spouses\.(\d)\.name$/.exec(path);
   if (m) {
     const t = inputs.querySelector(`[data-title="${m[1]}"]`);

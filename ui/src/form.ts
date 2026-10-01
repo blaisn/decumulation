@@ -1,4 +1,4 @@
-import { STRATEGY_NAMES } from "./model";
+import { STRATEGY_NAMES, shareComplement } from "./model";
 import type { FormState, SpouseForm } from "./model";
 import { esc } from "./format";
 
@@ -31,13 +31,20 @@ function pensionRows(sp: SpouseForm, i: number): string {
   }).join("");
 }
 
-function spouseSection(sp: SpouseForm, i: number, open: boolean): string {
+/** Part des dépenses du couple : saisie pour le premier conjoint, affichage seulement (100 − part) pour le second. */
+function shareField(first: SpouseForm, i: number): string {
+  if (i === 0) return field("Part des dépenses du couple dont il a la charge", "spouses.0.expenseShare", first.expenseShare ?? "50", { suffix: "%", wide: true, hint: "Répartit les dépenses visées entre les conjoints dans le CSV. Le deuxième conjoint a le reste." });
+  return `<label class="f wide"><span class="lab">Part des dépenses du couple dont il a la charge</span><span class="ctl"><input type="text" readonly aria-readonly="true" tabindex="-1" data-share-complement value="${esc(shareComplement(first.expenseShare))}"><span class="suf">%</span></span><span class="hint">100 % moins la part du premier conjoint (affichage seulement)</span></label>`;
+}
+
+function spouseSection(sp: SpouseForm, i: number, open: boolean, first: SpouseForm): string {
   const b = `spouses.${i}`;
   return `<details class="sec" data-sec="spouse${i}"${open ? " open" : ""}><summary><span data-title="${i}">${esc(sp.name.trim() || `Conjoint ${i + 1}`)}</span></summary><div class="body">
     <div class="grid">
       ${textField("Prénom", `${b}.name`, sp.name)}
       ${field("Année de naissance", `${b}.birthYear`, sp.birthYear)}
       ${field("Âge au décès, si on veut le tester", `${b}.deathAge`, sp.deathAge, { suffix: "ans", placeholder: "aucun", wide: true })}
+      ${shareField(first, i)}
       ${field("Espérance de vie à 65 ans", `${b}.lifeExpectancy`, sp.lifeExpectancy, { suffix: "ans", wide: true, hint: "Sert à l'onglet Ordre des décès. Québec, 2025 : 19,8 ans pour un homme, 22,1 ans pour une femme (ISQ). Ajustez selon la santé et pour tenir compte des gains futurs de longévité." })}
     </div>
     <fieldset><legend>Épargne</legend><div class="grid">
@@ -74,8 +81,8 @@ export function renderForm(f: FormState, openSecs: Set<string>): string {
     ${field("Rendement du REER/FERR", "assumptions.reerReturn", a.reerReturn, { suffix: "%" })}
     ${field("Rendement du CELI", "assumptions.celiReturn", a.celiReturn, { suffix: "%" })}
   </div></div></details>
-  ${spouseSection(f.spouses[0], 0, o("spouse0"))}
-  ${spouseSection(f.spouses[1], 1, o("spouse1"))}
+  ${spouseSection(f.spouses[0], 0, o("spouse0"), f.spouses[0])}
+  ${spouseSection(f.spouses[1], 1, o("spouse1"), f.spouses[0])}
   <details class="sec" data-sec="strategy"${o("strategy") ? " open" : ""}><summary>Stratégie de retrait</summary><div class="body">
     <label class="f wide"><span class="lab">Ordre des retraits</span><select data-path="strategy.kind" data-rerender="1">${STRATEGY_NAMES.map(([v, t]) => `<option value="${v}"${st.kind === v ? " selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
     ${needsCeiling ? `<div class="grid">

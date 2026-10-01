@@ -9,6 +9,7 @@ import { strategiesTable, yearTable } from "../ui/src/tables";
 import { comparePanel } from "../ui/src/compare-view";
 import { renderForm } from "../ui/src/form";
 import { parsePrefs } from "../ui/src/prefs";
+import { shareComplement } from "../ui/src/model";
 import { deathMatrix, deathRankTable } from "../ui/src/tables";
 import { compareLongevity } from "../src/index";
 import { summarize } from "../src/index";
@@ -99,9 +100,11 @@ describe("export et affichage", () => {
     expect(csv.trim().split("\r\n").length).toBe(1 + rows.length * 2);
     expect(has(csv, '"<b>""Alex""</b>"')).toBe(true); // guillemets échappés
     const head = csv.split("\r\n")[0].split(";");
-    expect(head.length).toBe(22);
+    expect(head.length).toBe(24);
     expect(head[20]).toBe("Indice d'inflation (départ = 1)");    // les 21 premières colonnes n'ont pas bougé
     expect(head[21]).toBe("Taux marginal (%)");
+    expect(head[22]).toBe("Dépenses visées");                      // colonnes ajoutées à la fin : les 22 premières n'ont pas bougé
+    expect(head[23]).toBe("Part des dépenses (%)");
     const first = csv.split("\r\n")[1].split(";");
     expect(first[20]).toBe("1,0000");                              // indice d'inflation de l'année de départ
     expect(first[21]).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
@@ -450,5 +453,93 @@ describe("harmonisation RRQ à 65 ans dans le formulaire", () => {
     const back = fileFromJson(fileToJson(f, null)).form.spouses[0].pensions[0];
     expect(back.harmonization).toBe(true);
     expect(back.amountAt65).toBe("36000");
+  });
+});
+
+describe("part des dépenses du couple", () => {
+  const lines = (csv: string) => csv.trim().split("\r\n").slice(1).map((l) => l.split(";"));
+  it("le premier conjoint a 50 % par défaut; le second n'a pas de champ saisi", () => {
+    const f = defaultForm();
+    expect(f.spouses[0].expenseShare).toBe("50");
+    expect(f.spouses[1].expenseShare).toBe(undefined);
+    expect(toScenario(f).scenario!.firstSpouseSpendingShare).toBe(0.5);
+  });
+  it("convertit le pourcentage saisi en fraction, virgule décimale comprise", () => {
+    const f = defaultForm();
+    f.spouses[0].expenseShare = "62,5";
+    expect(toScenario(f).scenario!.firstSpouseSpendingShare).toBeCloseTo(0.625, 10);
+    f.spouses[0].expenseShare = "0";
+    expect(toScenario(f).scenario!.firstSpouseSpendingShare).toBe(0);
+    f.spouses[0].expenseShare = "100";
+    expect(toScenario(f).scenario!.firstSpouseSpendingShare).toBe(1);
+  });
+  it("refuse une part invalide ou hors de 0 à 100, avec le prénom", () => {
+    for (const bad of ["abc", "-5", "101", ""]) {
+      const f = defaultForm(); f.spouses[0].expenseShare = bad;
+      const r = toScenario(f);
+      expect(r.scenario).toBe(undefined);
+      expect(r.errors.some((e) => e.includes("Alex : part des dépenses du couple"))).toBe(true);
+    }
+  });
+  it("shareComplement : 100 moins la part, ou « — » si la saisie n'est pas valide", () => {
+    expect(shareComplement("50")).toBe("50");
+    expect(shareComplement("70")).toBe("30");
+    expect(shareComplement("33,33")).toBe("66,67");
+    expect(shareComplement("0")).toBe("100");
+    expect(shareComplement("100")).toBe("0");
+    for (const bad of ["", "abc", "-1", "120", undefined]) expect(shareComplement(bad)).toBe("—");
+  });
+  it("le formulaire : champ modifiable pour le premier conjoint, lecture seule (sans chemin de saisie) pour le second", () => {
+    const f = defaultForm(); f.spouses[0].expenseShare = "70";
+    const html = renderForm(f, new Set(["spouse0", "spouse1"]));
+    expect(/data-path="spouses\.0\.expenseShare" value="70"/.test(html)).toBe(true);
+    expect(html).not.toContain('data-path="spouses.1.expenseShare"');
+    const ro = /<input type="text" readonly aria-readonly="true" tabindex="-1" data-share-complement value="([^"]*)">/.exec(html)!;
+    expect(ro[1]).toBe("30");
+    expect(html).toContain("affichage seulement");
+    expect(html.split("Part des dépenses du couple dont il a la charge").length - 1).toBe(2);
+  });
+  it("le second conjoint se met à jour avec la part du premier, et indique « — » si elle est invalide", () => {
+    const f = defaultForm(); f.spouses[0].expenseShare = "abc";
+    expect(/data-share-complement value="—"/.test(renderForm(f, new Set(["spouse1"])))).toBe(true);
+  });
+  it("suit les changements depuis la base, avec le prénom", () => {
+    const a = defaultForm(), b = JSON.parse(JSON.stringify(a)) as typeof a;
+    b.spouses[0].expenseShare = "60";
+    expect(describeChanges(a, b)).toEqual(["Alex, part des dépenses du couple : 50 → 60"]);
+  });
+  it("un ancien fichier sans ce champ reprend 50 %; l'aller-retour par fichier le conserve", () => {
+    const old = JSON.parse(JSON.stringify(defaultForm())); delete old.spouses[0].expenseShare;
+    expect(formFromJson(JSON.stringify({ form: old })).spouses[0].expenseShare).toBe("50");
+    const f = defaultForm(); f.spouses[0].expenseShare = "65";
+    expect(fileFromJson(fileToJson(f, null)).form.spouses[0].expenseShare).toBe("65");
+  });
+  it("CSV : la dépense visée et la part de chaque conjoint, qui totalisent la dépense du ménage", () => {
+    const f = defaultForm(); f.spouses[0].expenseShare = "70"; f.spouses[0].deathAge = "";
+    f.spouses[1].deathAge = "";
+    const sc = toScenario(f).scenario!;
+    const rows = runProjection(sc, tax);
+    const csv = lines(planToCsv(sc, rows));
+    const a = csv[0], b = csv[1];                                   // 2026 : Alex puis Sam
+    expect(a[22]).toBe("70000");
+    expect(b[22]).toBe("30000");
+    expect(a[23]).toBe("70,00");
+    expect(b[23]).toBe("30,00");
+    expect(Number(a[22]) + Number(b[22])).toBe(Math.round(rows[0].targetSpending));
+    // en 2030 : indexé à l'inflation, toujours 70 / 30
+    const y = rows.find((r) => r.year === 2030)!;
+    const r2030 = csv.filter((l) => l[0] === "2030");
+    expect(Number(r2030[0][22])).toBe(Math.round(0.7 * y.targetSpending));
+    expect(Number(r2030[1][22])).toBe(Math.round(0.3 * y.targetSpending));
+  });
+  it("CSV après un décès : le survivant a 100 % de la dépense réduite, le défunt 0", () => {
+    const f = defaultForm(); f.spouses[0].expenseShare = "70"; f.spouses[0].deathAge = "80"; f.spouses[1].deathAge = "";
+    const sc = toScenario(f).scenario!;
+    const rows = runProjection(sc, tax);
+    const apres = lines(planToCsv(sc, rows)).filter((l) => l[0] === "2041");        // Alex est né en 1960 : décès fin 2040
+    expect(apres[0][22]).toBe("0");
+    expect(apres[0][23]).toBe("0,00");
+    expect(apres[1][23]).toBe("100,00");
+    expect(Number(apres[1][22])).toBe(Math.round(rows.find((r) => r.year === 2041)!.targetSpending));
   });
 });
