@@ -1,7 +1,8 @@
 name: Installateur Windows
 
-# Produit l'installateur et la version portable. Lancement manuel (onglet Actions > Run workflow)
-# ou automatique quand on pousse une étiquette de version, par exemple v0.1.0.
+# Construit l'installateur (NSIS), la version portable et le MSI, calcule leurs sommes de contrôle,
+# puis, pour une étiquette de version (v0.2.0, par exemple), publie une version GitHub et, si configuré, copie les fichiers sur S3.
+# Lancement manuel : onglet Actions > Installateur Windows > Run workflow (construit sans rien publier).
 on:
   workflow_dispatch:
   push:
@@ -16,10 +17,21 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     env:
-      # Aucune signature de code : Windows affichera un avertissement SmartScreen au premier lancement.
+      # Aucune signature de code par défaut : Windows affichera un avertissement SmartScreen au premier lancement.
+      # Pour signer : ajouter les secrets CSC_LINK et CSC_KEY_PASSWORD (voir docs/PUBLICATION.md) et retirer cette ligne.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Vérifier que l'étiquette correspond à la version de package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          v="$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME}" != "v${v}" ]; then
+            echo "L'étiquette ${GITHUB_REF_NAME} ne correspond pas à la version ${v} de package.json" >&2
+            exit 1
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -36,13 +48,77 @@ jobs:
           npm run typecheck
           npm test
 
-      - name: Construire l'installateur et la version portable
+      - name: Construire l'installateur, la version portable et le MSI
         run: npm run dist
+
+      - name: Calculer les sommes de contrôle
+        shell: pwsh
+        run: |
+          Get-ChildItem release/* -File -Include *.msi,*.exe | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Set-Content -Encoding utf8 release/SHA256SUMS.txt
+          Get-Content release/SHA256SUMS.txt
 
       - name: Conserver les fichiers produits
         uses: actions/upload-artifact@v4
         with:
           name: decumulation-windows
-          path: release/*.exe
+          path: |
+            release/*.msi
+            release/*.exe
+            release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+  release:
+    name: Publier la version GitHub
+    needs: windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # nécessaire pour créer la version et y joindre les fichiers
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: decumulation-windows
+          path: release
+
+      - name: Créer la version GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flag=""
+          # Les versions 0.x sont marquées « préversion ».
+          if [[ "${GITHUB_REF_NAME}" == v0.* ]]; then flag="--prerelease"; fi
+          gh release create "${GITHUB_REF_NAME}" release/* --repo "${GITHUB_REPOSITORY}" \
+            --title "Décumulation ${GITHUB_REF_NAME}" --generate-notes ${flag}
+
+  publish-s3:
+    name: Copier sur S3 (facultatif)
+    needs: windows
+    # Inactif tant que la variable de dépôt S3_BUCKET n'est pas définie (voir docs/PUBLICATION.md).
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && vars.S3_BUCKET != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write     # authentification à AWS par OIDC, sans clé d'accès enregistrée
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: decumulation-windows
+          path: release
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Copier la version et les liens stables « latest »
+        env:
+          BUCKET: ${{ vars.S3_BUCKET }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          aws s3 cp release/ "s3://${BUCKET}/decumulation/${GITHUB_REF_NAME}/" --recursive
+          aws s3 cp "release/Decumulation-${v}.msi" "s3://${BUCKET}/decumulation/latest/Decumulation.msi" --cache-control "no-cache"
+          aws s3 cp "release/Decumulation-installateur-${v}.exe" "s3://${BUCKET}/decumulation/latest/Decumulation-installateur.exe" --cache-control "no-cache"
+          aws s3 cp "release/Decumulation-portable-${v}.exe" "s3://${BUCKET}/decumulation/latest/Decumulation-portable.exe" --cache-control "no-cache"
