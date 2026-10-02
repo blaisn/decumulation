@@ -135,8 +135,8 @@ describe("export et affichage", () => {
     expect(csv.trim().split("\r\n").length).toBe(1 + rows.length * 2);
     expect(has(csv, '"<b>""Alex""</b>"')).toBe(true); // guillemets échappés
     const t = parseCsv(csv);
-    expect(t.headers.length).toBe(28);
-    expect(new Set(t.rows.map((r) => r.length))).toEqual(new Set([28]));
+    expect(t.headers.length).toBe(29);
+    expect(new Set(t.rows.map((r) => r.length))).toEqual(new Set([29]));
     expect(t.col(t.rows[0], "Indice d'inflation (départ = 1)")).toBe("1,0000");                   // indice d'inflation de l'année de départ
     expect(t.col(t.rows[0], "Taux marginal (%)")).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
     expect(t.col(t.rows[2], "Indice d'inflation (départ = 1)")).toBe("1,0200");
@@ -1374,11 +1374,11 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
     expect(h.slice(5, 12)).toEqual(["Retraits REER/FERR", "Retraits CELI", "Retraits non enr.", "Vente d'immeubles", "Gain en capital imposable", "Cotisation CELI", "Cotisation non enr."]);
     expect(h.indexOf("Impôt")).toBe(h.indexOf("Taux marginal") + 1);          // l'impôt suit le taux marginal
   });
-  it("CSV : l'ordre exact des 28 colonnes", () => {
+  it("CSV : l'ordre exact des 29 colonnes", () => {
     const { scenario, rows } = sc("100000");
     expect(parseCsv(planToCsv(scenario, rows)).headers).toEqual([
       "Année", "Conjoint", "Âge", "En vie", "Rente de régime de retraite", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI", "Retraits non enregistré",
-      "Rendement imposable non enregistré", "Vente d'immeubles", "Gain en capital imposable", "Cotisation CELI", "Cotisation non enregistré", "Récupération de la PSV",
+      "Rendement imposable non enregistré", "Vente d'immeubles", "Gain en capital imposable", "Espace CELI", "Cotisation CELI", "Cotisation non enregistré", "Récupération de la PSV",
       "Fractionnement (reçu + / cédé −)", "Revenu imposable", "Taux marginal (%)", "Impôt", "Dépenses visées", "Dépenses supp.", "Part des dépenses (%)", "Manque",
       "Solde REER/FERR", "Solde CELI", "Solde non enregistré", "Indice d'inflation (départ = 1)",
     ]);
@@ -1396,6 +1396,7 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
     expect(h.indexOf("Conjoint")).toBe(h.indexOf("Année") + 1);
     expect(h.indexOf("En vie")).toBe(h.indexOf("Âge") + 1);
     expect(h.indexOf("Rendement imposable non enregistré")).toBe(h.indexOf("Retraits non enregistré") + 1);
+    expect(h.indexOf("Espace CELI")).toBe(h.indexOf("Cotisation CELI") - 1);                  // l'espace disponible, juste avant la cotisation
     expect(h.indexOf("Dépenses supp.")).toBe(h.indexOf("Dépenses visées") + 1);              // demandé : juste après « Dépenses visées »
     expect(h.indexOf("Part des dépenses (%)")).toBe(h.indexOf("Dépenses supp.") + 1);
     expect(h.indexOf("Manque")).toBe(h.indexOf("Part des dépenses (%)") + 1);
@@ -1704,5 +1705,83 @@ describe("dépenses supplémentaires : résultats", () => {
     expect(y.shortfall).toBeGreaterThan(100000);
     expect(y.netIncome).toBeCloseTo(y.targetSpending + y.extraSpending - y.shortfall, 6);
     expect(sc([]).rows.every((r) => r.shortfall < 1)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("espace CELI : colonne du CSV seulement", () => {
+  const sc = (mutate?: (f: FormState) => void) => {
+    const f = defaultForm(); mutate?.(f);
+    const scenario = toScenario(f).scenario!;
+    return { scenario, rows: runProjection(scenario, tax) };
+  };
+  const withSale = (f: FormState) => { f.properties = [{ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000" }]; };
+  const limit = (n: number) => Math.round((7000 * Math.pow(1.02, n)) / 500) * 500;
+
+  it("« Espace CELI » est dans le CSV, juste avant « Cotisation CELI » (l'espace, puis la cotisation qui l'utilise)", () => {
+    const { scenario, rows } = sc();
+    const h = parseCsv(planToCsv(scenario, rows)).headers;
+    expect(h.indexOf("Cotisation CELI")).toBe(h.indexOf("Espace CELI") + 1);
+    expect(h.indexOf("Espace CELI")).toBe(h.indexOf("Gain en capital imposable") + 1);
+    expect(h.length).toBe(29);
+  });
+  it("il n'est pas dans le tableau du Détail annuel, même avec toutes les colonnes possibles", () => {
+    const { scenario, rows } = sc((f) => { withSale(f); f.extraExpenses = [{ label: "Voiture", year: "2029", amount: "40000" }]; });
+    const headers = parseYearTable(yearTable(scenario, rows, false)).headers;
+    expect(headers.length).toBe(23);
+    expect(headers.some((x) => /espace/i.test(x))).toBe(false);
+    expect(parseCsv(planToCsv(scenario, rows)).headers).toContain("Espace CELI");
+  });
+  it("la première année : les droits de cotisation saisis pour chaque conjoint; ensuite le plafond annuel s'ajoute", () => {
+    const { scenario, rows } = sc((f) => { f.spouses[1].celiRoom = "12345"; });
+    const t = parseCsv(planToCsv(scenario, rows));
+    const row = (year: number, who: string) => t.rows.find((l) => t.col(l, "Année") === String(year) && t.col(l, "Conjoint") === who)!;
+    expect(t.col(row(2026, "Alex"), "Espace CELI")).toBe("40000");
+    expect(t.col(row(2026, "Sam"), "Espace CELI")).toBe("12345");
+    expect(t.col(row(2027, "Alex"), "Espace CELI")).toBe(String(40000 + limit(1)));        // 47 000 $ : sans cotisation ni retrait en 2026
+    expect(t.col(row(2027, "Sam"), "Espace CELI")).toBe(String(12345 + limit(1)));
+  });
+  it("les valeurs du CSV sont celles du moteur, arrondies, pour chaque conjoint et chaque année", () => {
+    const { scenario, rows } = sc(withSale);
+    const t = parseCsv(planToCsv(scenario, rows));
+    rows.forEach((y) => y.spouses.forEach((p, i) => {
+      const line = t.rows.find((l) => t.col(l, "Année") === String(y.year) && t.col(l, "Conjoint") === scenario.spouses[i].name)!;
+      expect(t.col(line, "Espace CELI")).toBe(String(Math.round(p.celiRoom)));
+    }));
+  });
+  it("la cotisation ne dépasse jamais l'espace, et l'espace de l'année suivante en tient compte (valeurs du CSV)", () => {
+    const { scenario, rows } = sc(withSale);
+    const t = parseCsv(planToCsv(scenario, rows));
+    let contributions = 0, chained = 0;
+    for (const who of ["Alex", "Sam"]) {
+      const lines = t.rows.filter((l) => t.col(l, "Conjoint") === who);
+      lines.forEach((l, k) => {
+        const room = Number(t.col(l, "Espace CELI")), contribution = Number(t.col(l, "Cotisation CELI"));
+        expect(contribution).toBeLessThanOrEqual(room + 1);
+        if (contribution > 0) contributions++;
+        if (k > 0) {
+          const prev = lines[k - 1];
+          if (t.col(prev, "En vie") === "oui" && t.col(l, "En vie") === "oui") {
+            const expected = Number(t.col(prev, "Espace CELI")) - Number(t.col(prev, "Cotisation CELI")) + limit(k) + Number(t.col(prev, "Retraits CELI"));
+            expect(Math.abs(Number(t.col(l, "Espace CELI")) - expected)).toBeLessThanOrEqual(2);        // arrondis
+            chained++;
+          }
+        }
+      });
+    }
+    expect(contributions).toBeGreaterThan(5);                // la vente de l'immeuble donne lieu à de grosses cotisations
+    expect(chained).toBeGreaterThan(50);
+  });
+  it("après un décès, l'espace du défunt est 0 dans le CSV", () => {
+    const { scenario, rows } = sc((f) => { f.spouses[0].deathAge = "75"; });
+    const t = parseCsv(planToCsv(scenario, rows));
+    const apres = t.rows.filter((l) => t.col(l, "Conjoint") === "Alex" && Number(t.col(l, "Année")) > 2035);
+    expect(apres.length).toBeGreaterThan(10);
+    expect(apres.every((l) => t.col(l, "En vie") === "non" && t.col(l, "Espace CELI") === "0")).toBe(true);
+  });
+  it("sans droits au départ ni plafond, l'espace est 0 partout", () => {
+    const { scenario, rows } = sc((f) => { f.spouses[0].celiRoom = "0"; f.spouses[1].celiRoom = "0"; f.assumptions.celiAnnualLimit = "0"; });
+    const t = parseCsv(planToCsv(scenario, rows));
+    expect(t.rows.every((l) => t.col(l, "Espace CELI") === "0")).toBe(true);
   });
 });

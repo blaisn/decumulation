@@ -24,6 +24,8 @@ const COLUMNS: { header: string; value: (r: Row) => string | number }[] = [
   { header: "Rendement imposable non enregistré", value: (r) => r.sp.nonRegIncome },
   { header: "Vente d'immeubles", value: (r) => r.sp.propertyProceeds },
   { header: "Gain en capital imposable", value: (r) => r.sp.taxableCapitalGain },
+  // Espace CELI (droits de cotisation disponibles), juste avant la cotisation qui l'utilise. Seulement dans le CSV.
+  { header: "Espace CELI", value: (r) => r.sp.celiRoom },
   { header: "Cotisation CELI", value: (r) => r.sp.celiContribution },
   { header: "Cotisation non enregistré", value: (r) => r.sp.nonRegContribution },
   { header: "Récupération de la PSV", value: (r) => r.sp.psvClawback },

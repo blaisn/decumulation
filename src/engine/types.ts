@@ -158,6 +158,7 @@ export interface SpouseYear {
   celiBalanceEnd: number;
   nonRegIncome: number; // part imposable du rendement du compte non enregistré (incluse dans le revenu imposable)
   nonRegWithdrawal: number;
+  celiRoom: number; // espace CELI : droits de cotisation disponibles cette année, avant les cotisations (reste des années précédentes + plafond annuel indexé + retraits de l'année précédente; au départ, les droits saisis); 0 si décédé
   celiContribution: number;
   nonRegContribution: number;
   nonRegBalanceEnd: number;

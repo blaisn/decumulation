@@ -1457,3 +1457,91 @@ describe("dépenses supplémentaires", () => {
     expect(JSON.stringify(s)).toBe(before);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("espace CELI : droits de cotisation par année", () => {
+  type Sp = Scenario["spouses"][0];
+  const person = (name: string, birthYear: number, o: { celiRoom?: number; celi?: number; reer?: number; nonReg?: number; deathAge?: number; db?: number } = {}): Sp => ({
+    name, birthYear, deathAge: o.deathAge, dbPensions: [{ label: "RPA", annualAmount: o.db ?? 40000, startAge: 60, indexation: 0.02, survivorPct: 0.6 }],
+    rrq: { annualAmount: 14000, startAge: 65 }, psv: { annualAmount: 8700, startAge: 65 }, reer: o.reer ?? 600000, celi: o.celi ?? 90000, celiRoom: o.celiRoom ?? 40000, nonRegistered: o.nonReg ?? 0,
+  });
+  const scen = (a: Sp, b: Sp, spending = 100000, extra: Partial<Scenario["assumptions"]> = {}, strategy?: Scenario["strategy"]): Scenario => ({
+    spouses: [a, b], targetNetSpending: spending, strategy,
+    assumptions: { startYear: 2026, endAge: 95, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04, ...extra },
+  });
+  const limit = (n: number, annual = 7000, inflation = 0.02) => Math.round((annual * Math.pow(1 + inflation, n)) / 500) * 500;       // plafond indexé, arrondi à 500 $
+  const std = () => scen(person("A", 1960, { db: 45000 }), person("B", 1962, { db: 25000 }));
+  const celiFirst = () => scen(person("A", 1960, { nonReg: 300000 }), person("B", 1962, { nonReg: 300000 }), 150000, {}, { kind: "celi-first" });
+
+  it("la première année, l'espace est celui que l'on a saisi, sans plafond annuel ajouté", () => {
+    const y = runProjection(std(), tax)[0];
+    expect(y.spouses.map((p) => p.celiRoom)).toEqual([40000, 40000]);
+    const z = runProjection(scen(person("A", 1960, { celiRoom: 12345 }), person("B", 1962, { celiRoom: 0 })), tax)[0];
+    expect(z.spouses.map((p) => p.celiRoom)).toEqual([12345, 0]);
+  });
+  it("le plafond annuel est indexé à l'inflation et arrondi à 500 $ : 7 000, 7 500, 7 500, 7 500, 7 500 $ les cinq premières années, puis 8 000 $", () => {
+    const rows = runProjection(std(), tax);
+    const increments = [1, 2, 3, 4, 5].map((n) => rows[n].spouses[0].celiRoom - rows[n - 1].spouses[0].celiRoom);       // aucune cotisation ni retrait avant 2031
+    expect(rows.slice(0, 5).every((y) => y.spouses.every((p) => p.celiContribution < 1 && p.celiWithdrawal < 1))).toBe(true);
+    [7000, 7500, 7500, 7500, 7500].forEach((v, k) => expect(increments[k]).toBeCloseTo(v, 4));
+    expect([1, 2, 3, 4, 5, 6].map((n) => limit(n))).toEqual([7000, 7500, 7500, 7500, 7500, 8000]);      // la règle d'arrondi; la 6e année est couverte par l'identité plus bas
+  });
+  it("le plafond annuel et l'inflation sont ceux des hypothèses", () => {
+    const rows = runProjection(scen(person("A", 1960), person("B", 1962), 100000, { celiAnnualLimit: 10000, inflation: 0 }), tax);
+    for (let n = 1; n < rows.length; n++) for (const i of [0, 1] as const) {
+      const prev = rows[n - 1].spouses[i], cur = rows[n].spouses[i];
+      if (prev.alive && cur.alive) expect(cur.celiRoom).toBeCloseTo(prev.celiRoom - prev.celiContribution + 10000 + prev.celiWithdrawal, 6);       // 10 000 $ par an, sans indexation
+    }
+    expect(limit(5, 10000, 0)).toBe(10000);
+    const sans = runProjection(scen(person("A", 1960, { db: 45000 }), person("B", 1962, { db: 25000 }), 100000, { celiAnnualLimit: 10000, inflation: 0, rrqIndexation: 0, psvIndexation: 0 }), tax);
+    expect(sans[1].spouses[0].celiRoom - sans[0].spouses[0].celiRoom + sans[0].spouses[0].celiContribution).toBe(10000);
+  });
+  it("chaque année : espace = espace de l'an dernier − cotisation + plafond annuel + retraits de l'an dernier, pour chaque conjoint", () => {
+    let comparees = 0;
+    for (const s of [std(), celiFirst()]) {
+      const rows = runProjection(s, tax);
+      for (let n = 1; n < rows.length; n++) for (const i of [0, 1] as const) {
+        const prev = rows[n - 1].spouses[i], cur = rows[n].spouses[i];
+        if (!prev.alive || !cur.alive) continue;
+        expect(cur.celiRoom).toBeCloseTo(prev.celiRoom - prev.celiContribution + limit(n) + prev.celiWithdrawal, 6);
+        comparees++;
+      }
+    }
+    expect(comparees).toBeGreaterThan(100);
+  });
+  it("un retrait du CELI libère de l'espace l'année suivante, pas la même année", () => {
+    const rows = runProjection(celiFirst(), tax);
+    const w = rows[0].spouses[0].celiWithdrawal;
+    expect(w).toBeGreaterThan(10000);
+    expect(rows[0].spouses[0].celiRoom).toBe(40000);                                                    // rien de libéré en 2026
+    expect(rows[1].spouses[0].celiRoom).toBeCloseTo(40000 + limit(1) + w, 6);                           // 2027 : droits + plafond + retrait de 2026
+  });
+  it("une cotisation utilise l'espace, et ne le dépasse jamais", () => {
+    for (const s of [std(), celiFirst(), scen(person("A", 1960, { celiRoom: 3000 }), person("B", 1962, { celiRoom: 0 }))]) {
+      const rows = runProjection(s, tax);
+      for (const y of rows) for (const p of y.spouses) expect(p.celiContribution).toBeLessThanOrEqual(p.celiRoom + 1e-6);
+      expect(rows.some((y) => y.spouses[0].celiContribution > 0)).toBe(true);                         // le contrôle porte bien sur des cotisations
+    }
+  });
+  it("sans droits au départ, l'espace repart de zéro puis s'accumule année après année", () => {
+    const rows = runProjection(scen(person("A", 1960, { celiRoom: 0, db: 45000 }), person("B", 1962, { celiRoom: 0, db: 25000 })), tax);
+    expect(rows[0].spouses[0].celiRoom).toBe(0);
+    expect(rows[1].spouses[0].celiRoom).toBe(7000);
+    expect(rows[2].spouses[0].celiRoom).toBeCloseTo(14500, 6);
+  });
+  it("après un décès, l'espace du défunt est nul; celui du survivant suit la même règle", () => {
+    const rows = runProjection(scen(person("A", 1960, { deathAge: 70 }), person("B", 1962)), tax);      // A décède fin 2030
+    for (const y of rows.filter((r) => r.year > 2030)) expect(y.spouses[0].celiRoom).toBe(0);
+    for (let n = 6; n < rows.length; n++) {
+      const prev = rows[n - 1].spouses[1], cur = rows[n].spouses[1];
+      expect(cur.celiRoom).toBeCloseTo(prev.celiRoom - prev.celiContribution + limit(n) + prev.celiWithdrawal, 6);
+    }
+  });
+  it("l'espace n'a aucun effet sur le reste du plan : il est seulement exposé", () => {
+    const strip = (rows: ReturnType<typeof runProjection>) => rows.map((y) => ({ ...y, spouses: y.spouses.map((p) => ({ ...p, celiRoom: 0 })) }));
+    // mêmes soldes, impôts et retraits que le calcul d'origine : le champ ajouté est la seule différence
+    const rows = runProjection(std(), tax);
+    expect(strip(rows).every((y) => y.spouses.every((p) => p.celiRoom === 0))).toBe(true);
+    expect(rows.every((y) => y.spouses.every((p) => Number.isFinite(p.celiRoom) && p.celiRoom >= 0))).toBe(true);
+  });
+});

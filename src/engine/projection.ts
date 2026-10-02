@@ -223,7 +223,7 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
       reerWithdrawal: reerW[i], celiWithdrawal: celiW[i],
       taxableIncome: r.incomeAfterSplit[i] - r.clawback[i], psvClawback: r.clawback[i], pensionSplit: r.splitAmount[i], tax: r.tax[i],
       reerBalanceEnd: bal[i].reer, celiBalanceEnd: bal[i].celi,
-      nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
+      nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiRoom: roomCaps[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
       propertyProceeds: proceeds[i], taxableCapitalGain: gainIncome[i],
       extraSpending: oneOff * shares[i], spending: target * shares[i], spendingShare: shares[i], shortfall: celiNeed * shares[i],
       marginalRate: alive[i] ? r.marginal[i] : 0,
