@@ -45,6 +45,13 @@ function parseYearTable(html: string): { headers: string[]; rows: ParsedRow[] } 
 }
 const digitsOf = (t: string) => (/\d/.test(t) ? Number(t.replace(/[^\d-]/g, "")) : 0);       // « — » et vide valent 0
 
+/** CSV analysé : en-têtes et lignes; `col(ligne, nom)` lit une valeur par le nom de sa colonne, sans dépendre de l'ordre. */
+function parseCsv(csv: string) {
+  const [head, ...body] = csv.replace(/^\uFEFF/, "").trim().split("\r\n");
+  const headers = head.split(";");
+  const rows = body.map((l) => l.split(";"));
+  return { headers, rows, col: (row: string[], name: string) => { const k = headers.indexOf(name); if (k < 0) throw new Error(`colonne absente du CSV : ${name}`); return row[k]; } };
+}
 describe("formulaire vers scénario", () => {
   it("les valeurs d'exemple donnent un scénario valide, en fractions", () => {
     const r = toScenario(defaultForm());
@@ -127,19 +134,13 @@ describe("export et affichage", () => {
     expect(csv.charCodeAt(0)).toBe(0xfeff);
     expect(csv.trim().split("\r\n").length).toBe(1 + rows.length * 2);
     expect(has(csv, '"<b>""Alex""</b>"')).toBe(true); // guillemets échappés
-    const head = csv.split("\r\n")[0].split(";");
-    expect(head.length).toBe(26);
-    expect(head[20]).toBe("Indice d'inflation (départ = 1)");    // les 21 premières colonnes n'ont pas bougé
-    expect(head[21]).toBe("Taux marginal (%)");
-    expect(head[22]).toBe("Dépenses visées");                      // colonnes ajoutées à la fin : les 22 premières n'ont pas bougé
-    expect(head[23]).toBe("Part des dépenses (%)");
-    expect(head[24]).toBe("Vente d'immeubles");                       // colonnes ajoutées à la fin
-    expect(head[25]).toBe("Gain en capital imposable");
-    const first = csv.split("\r\n")[1].split(";");
-    expect(first[20]).toBe("1,0000");                              // indice d'inflation de l'année de départ
-    expect(first[21]).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
-    const second = csv.split("\r\n")[3].split(";");
-    expect(second[20]).toBe("1,0200");
+    const t = parseCsv(csv);
+    expect(t.headers.length).toBe(27);
+    expect(new Set(t.rows.map((r) => r.length))).toEqual(new Set([27]));
+    expect(t.col(t.rows[0], "Indice d'inflation (départ = 1)")).toBe("1,0000");                   // indice d'inflation de l'année de départ
+    expect(t.col(t.rows[0], "Taux marginal (%)")).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
+    expect(t.col(t.rows[2], "Indice d'inflation (départ = 1)")).toBe("1,0200");
+    expect(t.headers[t.headers.length - 1]).toBe("Indice d'inflation (départ = 1)");               // colonne de référence : à la fin
   });
   it("les graphiques sont des SVG accessibles; les noms sont échappés", () => {
     const b = balancesChart(s, rows, true);
@@ -154,7 +155,7 @@ describe("export et affichage", () => {
   });
   it("le tableau annuel sépare les rentes, la RRQ et la PSV, et leur somme reste celle des revenus garantis", () => {
     const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
-    expect(headers.slice(0, 7)).toEqual(["Année", "Âges", "Rentes de régimes", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI et non enr."]);
+    expect(headers.slice(0, 7)).toEqual(["Année", "Âges", "Rentes de régimes", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI"]);
     expect(headers.includes("Revenus garantis")).toBe(false);
     // 2033 : les deux conjoints touchent leurs rentes, la RRQ et la PSV
     const y = rows.find((r) => r.year === 2033)!;
@@ -169,10 +170,11 @@ describe("export et affichage", () => {
     const { headers } = parseYearTable(yearTable(s, rows, false));
     expect(headers.filter((h) => h === "Revenu imposable").length).toBe(1);
     expect(headers.filter((h) => h === "Taux marginal").length).toBe(1);
-    expect(headers.length).toBe(17);
+    expect(headers.length).toBe(20);
     expect(headers.some((h) => /Alex|Sam/.test(h))).toBe(false);
     expect(headers.indexOf("Revenu imposable")).toBe(headers.indexOf("Pension fractionnée") + 1);
     expect(headers.indexOf("Taux marginal")).toBe(headers.indexOf("Revenu imposable") + 1);
+    expect(headers.indexOf("Impôt")).toBe(headers.indexOf("Taux marginal") + 1);
   });
   it("ligne du ménage : revenu imposable total, taux marginal vide (il est propre à chaque personne)", () => {
     const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
@@ -206,7 +208,7 @@ describe("export et affichage", () => {
     expect(b.cells[at("Taux marginal")]).toMatch(/^\d{2},\d{2} %$/);
     expect(digitsOf(a.cells[at("Dépenses visées")])).toBe(Math.round(y.spouses[0].spending));
     expect(digitsOf(b.cells[at("Solde REER/FERR")])).toBe(Math.round(y.spouses[1].reerBalanceEnd));
-    expect(a.cells[at("Manque")]).toBe("");                       // le manque se calcule pour le ménage seulement
+    expect(digitsOf(a.cells[at("Manque")])).toBe(Math.round(y.spouses[0].shortfall));       // sa part du manque (ici nulle : tout est financé)
   });
   it("ligne d'un conjoint : la pension fractionnée est signée (+ reçue, − cédée), comme dans le CSV", () => {
     const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
@@ -232,7 +234,7 @@ describe("export et affichage", () => {
   });
   it("le total du ménage est la somme des deux conjoints, colonne par colonne et année par année", () => {
     const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
-    const additive = ["Rentes de régimes", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI et non enr.", "Impôt", "PSV récupérée", "Revenu imposable", "Dépenses visées", "Solde REER/FERR", "Solde CELI", "Solde non enr."];
+    const additive = ["Rentes de régimes", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI", "Retraits non enr.", "Cotisation CELI", "Cotisation non enr.", "Impôt", "PSV récupérée", "Revenu imposable", "Dépenses visées", "Manque", "Solde REER/FERR", "Solde CELI", "Solde non enr."];
     expect(additive.every((h) => headers.includes(h))).toBe(true);
     let compared = 0;
     for (const parent of lines.filter((l) => !l.sub)) {
@@ -643,28 +645,29 @@ describe("part des dépenses du couple", () => {
     f.spouses[1].deathAge = "";
     const sc = toScenario(f).scenario!;
     const rows = runProjection(sc, tax);
-    const csv = lines(planToCsv(sc, rows));
-    const a = csv[0], b = csv[1];                                   // 2026 : Alex puis Sam
-    expect(a[22]).toBe("70000");
-    expect(b[22]).toBe("30000");
-    expect(a[23]).toBe("70,00");
-    expect(b[23]).toBe("30,00");
-    expect(Number(a[22]) + Number(b[22])).toBe(Math.round(rows[0].targetSpending));
+    const t = parseCsv(planToCsv(sc, rows));
+    const [a, b] = t.rows;                                   // 2026 : Alex puis Sam
+    expect(t.col(a, "Dépenses visées")).toBe("70000");
+    expect(t.col(b, "Dépenses visées")).toBe("30000");
+    expect(t.col(a, "Part des dépenses (%)")).toBe("70,00");
+    expect(t.col(b, "Part des dépenses (%)")).toBe("30,00");
+    expect(Number(t.col(a, "Dépenses visées")) + Number(t.col(b, "Dépenses visées"))).toBe(Math.round(rows[0].targetSpending));
     // en 2030 : indexé à l'inflation, toujours 70 / 30
     const y = rows.find((r) => r.year === 2030)!;
-    const r2030 = csv.filter((l) => l[0] === "2030");
-    expect(Number(r2030[0][22])).toBe(Math.round(0.7 * y.targetSpending));
-    expect(Number(r2030[1][22])).toBe(Math.round(0.3 * y.targetSpending));
+    const r2030 = t.rows.filter((l) => t.col(l, "Année") === "2030");
+    expect(Number(t.col(r2030[0], "Dépenses visées"))).toBe(Math.round(0.7 * y.targetSpending));
+    expect(Number(t.col(r2030[1], "Dépenses visées"))).toBe(Math.round(0.3 * y.targetSpending));
   });
   it("CSV après un décès : le survivant a 100 % de la dépense réduite, le défunt 0", () => {
     const f = defaultForm(); f.spouses[0].expenseShare = "70"; f.spouses[0].deathAge = "80"; f.spouses[1].deathAge = "";
     const sc = toScenario(f).scenario!;
     const rows = runProjection(sc, tax);
-    const apres = lines(planToCsv(sc, rows)).filter((l) => l[0] === "2041");        // Alex est né en 1960 : décès fin 2040
-    expect(apres[0][22]).toBe("0");
-    expect(apres[0][23]).toBe("0,00");
-    expect(apres[1][23]).toBe("100,00");
-    expect(Number(apres[1][22])).toBe(Math.round(rows.find((r) => r.year === 2041)!.targetSpending));
+    const t = parseCsv(planToCsv(sc, rows));
+    const apres = t.rows.filter((l) => t.col(l, "Année") === "2041");        // Alex est né en 1960 : décès fin 2040
+    expect(t.col(apres[0], "Dépenses visées")).toBe("0");
+    expect(t.col(apres[0], "Part des dépenses (%)")).toBe("0,00");
+    expect(t.col(apres[1], "Part des dépenses (%)")).toBe("100,00");
+    expect(Number(t.col(apres[1], "Dépenses visées"))).toBe(Math.round(rows.find((r) => r.year === 2041)!.targetSpending));
   });
 });
 
@@ -1256,27 +1259,29 @@ describe("immeubles : résultats", () => {
   const plain = (t: string) => t.replace(/[\u00a0\u202f]/g, " ").replace(/&#39;/g, "'");
 
   it("CSV : le produit de la vente et le gain imposable de chaque conjoint, dans l'année de la vente seulement", () => {
-    const csv = lines(planToCsv(scenario, rows));
-    const row = (year: number, who: string) => csv.find((l) => l[0] === String(year) && l[1] === who)!;
-    expect(row(2030, "Alex")[24]).toBe("300000");
-    expect(row(2030, "Alex")[25]).toBe("100000");
-    expect(row(2030, "Sam")[24]).toBe("300000");
-    expect(row(2029, "Alex")[24]).toBe("0");
-    expect(row(2031, "Sam")[25]).toBe("0");
-    expect(Number(row(2030, "Alex")[12])).toBeGreaterThanOrEqual(100000);       // le revenu imposable comprend le gain
+    const t = parseCsv(planToCsv(scenario, rows));
+    const row = (year: number, who: string) => t.rows.find((l) => t.col(l, "Année") === String(year) && t.col(l, "Conjoint") === who)!;
+    expect(t.col(row(2030, "Alex"), "Vente d'immeubles")).toBe("300000");
+    expect(t.col(row(2030, "Alex"), "Gain en capital imposable")).toBe("100000");
+    expect(t.col(row(2030, "Sam"), "Vente d'immeubles")).toBe("300000");
+    expect(t.col(row(2029, "Alex"), "Vente d'immeubles")).toBe("0");
+    expect(t.col(row(2031, "Sam"), "Gain en capital imposable")).toBe("0");
+    expect(Number(t.col(row(2030, "Alex"), "Revenu imposable"))).toBeGreaterThanOrEqual(100000);       // le revenu imposable comprend le gain
   });
   it("CSV : les deux colonnes sont à zéro quand il n'y a pas d'immeuble", () => {
     const none = sc();
-    const csv = lines(planToCsv(none, runProjection(none, tax)));
-    expect(csv.every((l) => l[24] === "0" && l[25] === "0")).toBe(true);
+    const t = parseCsv(planToCsv(none, runProjection(none, tax)));
+    expect(t.rows.every((l) => t.col(l, "Vente d'immeubles") === "0" && t.col(l, "Gain en capital imposable") === "0")).toBe(true);
   });
   it("CSV : un immeuble à un seul propriétaire donne tout à ce conjoint", () => {
     const one = sc(chalet({ owner: "1" }));
-    const csv = lines(planToCsv(one, runProjection(one, tax)));
-    expect(csv.find((l) => l[0] === "2030" && l[1] === "Alex")![24]).toBe("0");
-    expect(csv.find((l) => l[0] === "2030" && l[1] === "Sam")![24]).toBe("600000");
-    expect(csv.find((l) => l[0] === "2030" && l[1] === "Sam")![25]).toBe("200000");
+    const t = parseCsv(planToCsv(one, runProjection(one, tax)));
+    const row = (who: string) => t.rows.find((l) => t.col(l, "Année") === "2030" && t.col(l, "Conjoint") === who)!;
+    expect(t.col(row("Alex"), "Vente d'immeubles")).toBe("0");
+    expect(t.col(row("Sam"), "Vente d'immeubles")).toBe("600000");
+    expect(t.col(row("Sam"), "Gain en capital imposable")).toBe("200000");
   });
+
   const heads = (html: string) => parseYearTable(html).headers;
 
   it("tableau annuel : sans vente, aucune colonne ajoutée", () => {
@@ -1284,13 +1289,13 @@ describe("immeubles : résultats", () => {
     const h = heads(yearTable(none, runProjection(none, tax), false));
     expect(h).not.toContain("Vente d'immeubles");
     expect(h).not.toContain("Gain en capital imposable");
-    expect(h.length).toBe(17);
+    expect(h.length).toBe(20);
   });
   it("tableau annuel : avec une vente, deux colonnes après les retraits, avec les montants de l'année de la vente", () => {
     const { headers: h, rows: lines } = parseYearTable(yearTable(scenario, rows, false));
-    expect(h.length).toBe(19);
+    expect(h.length).toBe(22);
     const i = h.indexOf("Vente d'immeubles");
-    expect(i).toBe(h.indexOf("Retraits CELI et non enr.") + 1);
+    expect(i).toBe(h.indexOf("Retraits non enr.") + 1);
     expect(h[i + 1]).toBe("Gain en capital imposable");
     const at = (year: number, k: number) => lines.filter((l) => l.year === year)[k];
     // ménage, puis chaque conjoint
@@ -1333,5 +1338,172 @@ describe("immeubles : résultats", () => {
         r.forEach((_, k) => expect(Math.abs(d.stacks[k] + d.shortfall[k] - d.outflow[k] - d.contributions[k])).toBeLessThan(1e-6));
       }
     }
+  });
+});
+
+describe("colonnes : tableau et CSV dans le même ordre", () => {
+  const sc = (spending: string, mutate?: (f: FormState) => void) => {
+    const f = defaultForm(); f.spending = spending; mutate?.(f);
+    const scenario = toScenario(f).scenario!;
+    return { scenario, rows: runProjection(scenario, tax) };
+  };
+  const withSale = (spending = "100000") => sc(spending, (f) => { f.properties = [{ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000" }]; });
+  // Correspondance entre les colonnes du tableau et celles du CSV (le CSV garde des libellés complets).
+  const CSV_NAME: Record<string, string> = {
+    "Année": "Année", "Âges": "Âge", "Rentes de régimes": "Rente de régime de retraite", "RRQ": "RRQ", "PSV": "PSV",
+    "Retraits REER/FERR": "Retraits REER/FERR", "Retraits CELI": "Retraits CELI", "Retraits non enr.": "Retraits non enregistré",
+    "Vente d'immeubles": "Vente d'immeubles", "Gain en capital imposable": "Gain en capital imposable",
+    "Cotisation CELI": "Cotisation CELI", "Cotisation non enr.": "Cotisation non enregistré", "PSV récupérée": "Récupération de la PSV",
+    "Pension fractionnée": "Fractionnement (reçu + / cédé −)", "Revenu imposable": "Revenu imposable", "Taux marginal": "Taux marginal (%)", "Impôt": "Impôt",
+    "Dépenses visées": "Dépenses visées", "Manque": "Manque", "Solde REER/FERR": "Solde REER/FERR", "Solde CELI": "Solde CELI", "Solde non enr.": "Solde non enregistré",
+  };
+
+  it("tableau : l'ordre des colonnes, sans vente d'immeubles", () => {
+    const { scenario, rows } = sc("100000");
+    expect(parseYearTable(yearTable(scenario, rows, false)).headers).toEqual([
+      "Année", "Âges", "Rentes de régimes", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI", "Retraits non enr.", "Cotisation CELI", "Cotisation non enr.",
+      "PSV récupérée", "Pension fractionnée", "Revenu imposable", "Taux marginal", "Impôt", "Dépenses visées", "Manque", "Solde REER/FERR", "Solde CELI", "Solde non enr.",
+    ]);
+  });
+  it("tableau : avec une vente d'immeubles, ses deux colonnes s'insèrent après les retraits et avant les cotisations", () => {
+    const { scenario, rows } = withSale();
+    const h = parseYearTable(yearTable(scenario, rows, false)).headers;
+    expect(h.length).toBe(22);
+    expect(h.slice(5, 12)).toEqual(["Retraits REER/FERR", "Retraits CELI", "Retraits non enr.", "Vente d'immeubles", "Gain en capital imposable", "Cotisation CELI", "Cotisation non enr."]);
+    expect(h.indexOf("Impôt")).toBe(h.indexOf("Taux marginal") + 1);          // l'impôt suit le taux marginal
+  });
+  it("CSV : l'ordre exact des 27 colonnes", () => {
+    const { scenario, rows } = sc("100000");
+    expect(parseCsv(planToCsv(scenario, rows)).headers).toEqual([
+      "Année", "Conjoint", "Âge", "En vie", "Rente de régime de retraite", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI", "Retraits non enregistré",
+      "Rendement imposable non enregistré", "Vente d'immeubles", "Gain en capital imposable", "Cotisation CELI", "Cotisation non enregistré", "Récupération de la PSV",
+      "Fractionnement (reçu + / cédé −)", "Revenu imposable", "Taux marginal (%)", "Impôt", "Dépenses visées", "Part des dépenses (%)", "Manque",
+      "Solde REER/FERR", "Solde CELI", "Solde non enregistré", "Indice d'inflation (départ = 1)",
+    ]);
+  });
+  it("le CSV contient toutes les colonnes du tableau, dans le même ordre", () => {
+    const { scenario, rows } = withSale();                      // avec une vente : le tableau a alors toutes ses colonnes possibles
+    const ui = parseYearTable(yearTable(scenario, rows, false)).headers;
+    const csv = parseCsv(planToCsv(scenario, rows)).headers;
+    const positions = ui.map((h) => { expect(CSV_NAME[h]).toBeDefined(); return csv.indexOf(CSV_NAME[h]); });
+    expect(positions.every((p) => p >= 0)).toBe(true);           // aucune colonne du tableau ne manque au CSV
+    for (let k = 1; k < positions.length; k++) expect(positions[k]).toBeGreaterThan(positions[k - 1]);       // même ordre
+  });
+  it("les colonnes propres au CSV sont à côté de ce à quoi elles se rapportent", () => {
+    const h = parseCsv(planToCsv(...(() => { const { scenario, rows } = sc("100000"); return [scenario, rows] as const; })())).headers;
+    expect(h.indexOf("Conjoint")).toBe(h.indexOf("Année") + 1);
+    expect(h.indexOf("En vie")).toBe(h.indexOf("Âge") + 1);
+    expect(h.indexOf("Rendement imposable non enregistré")).toBe(h.indexOf("Retraits non enregistré") + 1);
+    expect(h.indexOf("Part des dépenses (%)")).toBe(h.indexOf("Dépenses visées") + 1);
+    expect(h.indexOf("Manque")).toBe(h.indexOf("Part des dépenses (%)") + 1);
+    expect(h[h.length - 1]).toBe("Indice d'inflation (départ = 1)");
+  });
+  it("chaque ligne de conjoint du tableau a les mêmes valeurs que sa ligne du CSV, pour toutes les colonnes", () => {
+    for (const { scenario, rows } of [withSale(), sc("100000"), sc("170000")]) {
+      const t = parseYearTable(yearTable(scenario, rows, false));
+      const csv = parseCsv(planToCsv(scenario, rows));
+      let compared = 0;
+      for (const sub of t.rows.filter((r) => r.sub)) {
+        if (sub.ages === "†") continue;
+        const line = csv.rows.find((l) => csv.col(l, "Année") === String(sub.year) && decodeText(csv.col(l, "Conjoint")) === sub.who)!;
+        expect(line).toBeDefined();
+        t.headers.slice(2).forEach((h, k) => {
+          const shown = sub.cells[k], inCsv = csv.col(line, CSV_NAME[h]);
+          if (h === "Taux marginal") expect(shown.replace(" %", "")).toBe(inCsv);
+          else expect(digitsOf(shown)).toBe(Math.round(Number(inCsv)));
+          compared++;
+        });
+        expect(sub.ages).toBe(csv.col(line, "Âge"));
+      }
+      expect(compared).toBeGreaterThan(rows.length * 2 * 15);
+    }
+  });
+  it("retraits : « Retraits CELI » et « Retraits non enr. » sont deux colonnes, avec chacune sa valeur", () => {
+    const { scenario, rows } = sc("150000", (f) => { f.strategy.kind = "celi-first"; f.spouses[0].nonReg = "300000"; f.spouses[1].nonReg = "300000"; });
+    const t = parseYearTable(yearTable(scenario, rows, false));
+    const iC = t.headers.indexOf("Retraits CELI") - 2, iN = t.headers.indexOf("Retraits non enr.") - 2;
+    const y = rows.find((r) => r.spouses[0].celiWithdrawal + r.spouses[1].celiWithdrawal > 0 && r.spouses[0].nonRegWithdrawal + r.spouses[1].nonRegWithdrawal > 0)!;
+    expect(y).toBeDefined();                                      // une année avec les deux types de retraits (2029)
+    expect(rows.some((r) => r.spouses[0].celiWithdrawal + r.spouses[1].celiWithdrawal > 0)).toBe(true);        // le scénario d'essai a bien les deux types de retraits
+    expect(rows.some((r) => r.spouses[0].nonRegWithdrawal + r.spouses[1].nonRegWithdrawal > 0)).toBe(true);
+    const parent = t.rows.find((r) => !r.sub && r.year === y.year)!;
+    expect(digitsOf(parent.cells[iC])).toBe(Math.round(y.spouses[0].celiWithdrawal + y.spouses[1].celiWithdrawal));
+    expect(digitsOf(parent.cells[iN])).toBe(Math.round(y.spouses[0].nonRegWithdrawal + y.spouses[1].nonRegWithdrawal));
+    const subs = t.rows.filter((r) => r.sub && r.year === y.year);
+    expect(subs.map((r) => digitsOf(r.cells[iC]))).toEqual(y.spouses.map((p) => Math.round(p.celiWithdrawal)));
+    expect(subs.map((r) => digitsOf(r.cells[iN]))).toEqual(y.spouses.map((p) => Math.round(p.nonRegWithdrawal)));
+  });
+  it("sur l'ensemble du plan, les deux colonnes de retraits additionnées donnent l'ancienne colonne combinée", () => {
+    const { scenario, rows } = sc("150000", (f) => { f.strategy.kind = "celi-first"; f.spouses[0].nonReg = "300000"; f.spouses[1].nonReg = "300000"; });
+    const t = parseYearTable(yearTable(scenario, rows, false));
+    const iC = t.headers.indexOf("Retraits CELI") - 2, iN = t.headers.indexOf("Retraits non enr.") - 2;
+    let any = false;
+    for (const parent of t.rows.filter((r) => !r.sub)) {
+      const y = rows.find((r) => r.year === parent.year)!;
+      const combined = y.spouses[0].celiWithdrawal + y.spouses[0].nonRegWithdrawal + y.spouses[1].celiWithdrawal + y.spouses[1].nonRegWithdrawal;
+      expect(Math.abs(digitsOf(parent.cells[iC]) + digitsOf(parent.cells[iN]) - combined)).toBeLessThanOrEqual(1);
+      if (combined > 0) any = true;
+    }
+    expect(any).toBe(true);
+  });
+  it("cotisations : « Cotisation CELI » et « Cotisation non enr. » donnent l'argent placé, par conjoint et pour le ménage", () => {
+    const { scenario, rows } = withSale();
+    const t = parseYearTable(yearTable(scenario, rows, false));
+    const iC = t.headers.indexOf("Cotisation CELI") - 2, iN = t.headers.indexOf("Cotisation non enr.") - 2;
+    const y = rows.find((r) => r.year === 2030)!;
+    const [parent, a, b] = t.rows.filter((r) => r.year === 2030);
+    expect(digitsOf(parent.cells[iC])).toBe(Math.round(y.spouses[0].celiContribution + y.spouses[1].celiContribution));
+    expect(digitsOf(parent.cells[iN])).toBe(Math.round(y.spouses[0].nonRegContribution + y.spouses[1].nonRegContribution));
+    expect(digitsOf(a.cells[iC])).toBe(Math.round(y.spouses[0].celiContribution));
+    expect(digitsOf(b.cells[iN])).toBe(Math.round(y.spouses[1].nonRegContribution));
+    expect(digitsOf(parent.cells[iC])).toBeGreaterThan(0);
+    expect(digitsOf(parent.cells[iN])).toBeGreaterThan(0);
+    const other = t.rows.find((r) => !r.sub && r.year === 2029)!;
+    expect(digitsOf(other.cells[iC]) + digitsOf(other.cells[iN])).toBe(0);
+  });
+
+  // ---- manque par conjoint
+  it("le manque de chaque conjoint est sa part du manque du ménage, selon sa part des dépenses", () => {
+    const { scenario, rows } = sc("170000", (f) => { f.spouses[0].expenseShare = "70"; });
+    const late = rows.filter((y) => y.shortfall > 1);
+    expect(late.length).toBeGreaterThan(5);
+    for (const y of late) {
+      expect(y.spouses[0].shortfall).toBeCloseTo(0.7 * y.shortfall, 6);
+      expect(y.spouses[1].shortfall).toBeCloseTo(0.3 * y.shortfall, 6);
+      expect(y.spouses[0].shortfall + y.spouses[1].shortfall).toBeCloseTo(y.shortfall, 6);
+    }
+    expect(rows.filter((y) => y.shortfall < 1).every((y) => y.spouses[0].shortfall + y.spouses[1].shortfall < 1e-9)).toBe(true);
+    expect(scenario.firstSpouseSpendingShare).toBeCloseTo(0.7, 10);
+  });
+  it("manque dans le tableau : le ménage affiche le total, chaque conjoint sa part, et les lignes s'additionnent", () => {
+    const { scenario, rows } = sc("170000", (f) => { f.spouses[0].expenseShare = "70"; });
+    const t = parseYearTable(yearTable(scenario, rows, false));
+    const i = t.headers.indexOf("Manque") - 2;
+    const y = rows[rows.length - 1];
+    expect(y.shortfall).toBeGreaterThan(1000);
+    const [parent, a, b] = t.rows.filter((r) => r.year === y.year);
+    expect(digitsOf(parent.cells[i])).toBe(Math.round(y.shortfall));
+    expect(digitsOf(a.cells[i])).toBe(Math.round(0.7 * y.shortfall));
+    expect(digitsOf(b.cells[i])).toBe(Math.round(0.3 * y.shortfall));
+    expect(Math.abs(digitsOf(a.cells[i]) + digitsOf(b.cells[i]) - digitsOf(parent.cells[i]))).toBeLessThanOrEqual(1);
+    expect(parent.short).toBe(true);
+  });
+  it("manque dans le CSV : même valeur que dans le tableau, répartie selon la part des dépenses, et 0 sans manque", () => {
+    const { scenario, rows } = sc("170000", (f) => { f.spouses[0].expenseShare = "70"; });
+    const t = parseCsv(planToCsv(scenario, rows));
+    const last = rows[rows.length - 1];
+    const [a, b] = t.rows.filter((l) => t.col(l, "Année") === String(last.year));
+    expect(t.col(a, "Manque")).toBe(String(Math.round(0.7 * last.shortfall)));
+    expect(t.col(b, "Manque")).toBe(String(Math.round(0.3 * last.shortfall)));
+    expect(Math.abs(Number(t.col(a, "Manque")) + Number(t.col(b, "Manque")) - Math.round(last.shortfall))).toBeLessThanOrEqual(1);
+    const first = t.rows.filter((l) => t.col(l, "Année") === String(rows[0].year));
+    expect(first.map((l) => t.col(l, "Manque"))).toEqual(["0", "0"]);
+  });
+  it("après un décès, tout le manque revient au survivant", () => {
+    const { rows } = sc("150000", (f) => { f.spouses[0].deathAge = "80"; f.spouses[0].expenseShare = "70"; });
+    const y = rows.find((r) => r.year > 2040 && r.shortfall > 1)!;
+    expect(y).toBeDefined();
+    expect(y.spouses[0].shortfall).toBe(0);
+    expect(y.spouses[1].shortfall).toBeCloseTo(y.shortfall, 6);
   });
 });
