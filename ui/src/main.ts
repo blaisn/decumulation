@@ -57,6 +57,7 @@ let optimScenario: Scenario | null = null;
 let optimRun: OptimizationRun | null = null;
 let optimProgress = { done: 0, total: 0, startedAt: 0 };
 let optimDirty = false;     // le formulaire a changé pendant le calcul
+const expandedYears = new Set<number>();      // années dépliées dans le Détail annuel (conservées d'un affichage à l'autre)
 let planMs = 0;             // durée mesurée (dans le worker) d'un calcul de plan : sert à estimer la durée de l'optimisation
 let lastComputeMs = 0;
 let compareError = "";
@@ -368,9 +369,10 @@ function detailPanel(): string {
   if (!plan) return `<p class="empty">Calcul en cours…</p>`;
   const last = plan.rows[plan.rows.length - 1].year;
   return `<div class="toolbar"><button type="button" class="ghost dark" data-action="export-csv">Exporter en CSV</button>
+      <button type="button" class="link" id="toggle-years" data-action="toggle-years">${plan.rows.every((y) => expandedYears.has(y.year)) ? "Tout réduire" : "Tout développer"}</button>
       <button type="button" class="link" id="toggle-note" data-action="toggle-note" aria-controls="detail-note" aria-expanded="${!hideDetailNote}">${hideDetailNote ? "Afficher la note" : "Masquer la note"}</button></div>
-    <p class="note" id="detail-note"${hideDetailNote ? " hidden" : ""}>${esc(unitNote(plan.scenario, last))} Pour l'ensemble du couple. Le symbole † indique un décès; les années en rouge manquent de fonds. Le revenu imposable (après fractionnement et déduction de la PSV récupérée) et le taux marginal sont donnés pour chaque conjoint; le taux marginal est le taux combiné fédéral et Québec du palier d'imposition, sans la récupération de la PSV ni la réduction des crédits. Le fichier CSV est toujours en dollars courants et contient l'indice d'inflation pour revenir aux dollars de ${esc(String(plan.scenario.assumptions.startYear))}.</p>
-    <div class="tall">${yearTable(plan.scenario, plan.rows, real)}</div>`;
+    <p class="note" id="detail-note"${hideDetailNote ? " hidden" : ""}>${esc(unitNote(plan.scenario, last))} Chaque ligne donne le total du ménage; le bouton › déplie le détail de chaque conjoint, avec les mêmes colonnes que le CSV. Son revenu imposable est calculé après le fractionnement et la déduction de la PSV récupérée; son taux marginal est le taux combiné fédéral et Québec du palier d'imposition, sans la récupération de la PSV ni la réduction des crédits; la pension fractionnée est signée (+ reçue, − cédée). Le symbole † indique un décès; les années en rouge manquent de fonds. Le fichier CSV est toujours en dollars courants et contient l'indice d'inflation pour revenir aux dollars de ${esc(String(plan.scenario.assumptions.startYear))}.</p>
+    <div class="tall">${yearTable(plan.scenario, plan.rows, real, expandedYears)}</div>`;
 }
 
 function comparePanelHtml(): string {
@@ -516,6 +518,21 @@ function renderPanel() {
   if (keep) document.getElementById(keep)?.focus();
 }
 
+/** Affiche ou masque les lignes des conjoints d'une année, et met à jour le bouton. */
+function setYearOpen(year: number, open: boolean) {
+  panel.querySelectorAll<HTMLElement>(`tr.sub[data-year="${year}"]`).forEach((tr) => { tr.hidden = !open; });
+  const btn = panel.querySelector<HTMLElement>(`.expander[data-year="${year}"]`);
+  if (btn) {
+    btn.setAttribute("aria-expanded", String(open));
+    btn.setAttribute("aria-label", `${open ? "Masquer" : "Afficher"} le détail par conjoint de ${year}`);
+  }
+  if (open) expandedYears.add(year); else expandedYears.delete(year);
+}
+function syncYearsToggle() {
+  const b = document.getElementById("toggle-years");
+  if (b && plan) b.textContent = plan.rows.every((y) => expandedYears.has(y.year)) ? "Tout réduire" : "Tout développer";
+}
+
 panel.addEventListener("change", (e) => {
   const el = e.target as HTMLInputElement | HTMLSelectElement;
   if (el.name === "deathMode") { deathMode = el.value as "longevity" | "first"; renderPanel(); }
@@ -534,6 +551,18 @@ panel.addEventListener("click", async (e) => {
   if (!b || (b as HTMLButtonElement).disabled) return;
   const a = b.dataset.action;
   if (a === "save-base-panel") { setBaseFromForm(); renderPanel(); return; }
+  if (a === "toggle-year") {
+    // Déplier un détail ne réaffiche pas le tableau : il garde sa position de défilement.
+    setYearOpen(Number(b.dataset.year), b.getAttribute("aria-expanded") !== "true");
+    syncYearsToggle();
+    return;
+  }
+  if (a === "toggle-years" && plan) {
+    const all = plan.rows.every((y) => expandedYears.has(y.year));
+    plan.rows.forEach((y) => setYearOpen(y.year, !all));
+    syncYearsToggle();
+    return;
+  }
   if (a === "toggle-note") {
     // Sans réafficher le panneau : le tableau garde sa position de défilement.
     hideDetailNote = !hideDetailNote; savePrefs();

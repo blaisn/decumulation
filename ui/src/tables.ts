@@ -3,41 +3,54 @@ import { esc, fmtMoney, fmtNum, fmtPct } from "./format";
 
 const deflate = (s: Scenario, real: boolean) => (year: number, x: number) => (real ? x / Math.pow(1 + s.assumptions.inflation, year - s.assumptions.startYear) : x);
 
+type Sp = YearResult["spouses"][0];
+
 /**
- * Détail du plan, une ligne par année, pour le ménage; le revenu imposable et le taux marginal sont donnés
- * pour chaque conjoint (l'impôt se calcule par personne). « — » indique un conjoint décédé.
+ * Détail du plan, une ligne par année pour le ménage. Le bouton « › » à gauche de l'année déplie le détail de chaque
+ * conjoint (mêmes colonnes, même structure que le CSV) : revenu imposable, taux marginal, impôt, soldes, etc.
+ * Les lignes des conjoints sont toujours dans le tableau, masquées (`hidden`) : déplier ne réaffiche rien et le tableau
+ * garde sa position de défilement. `expanded` donne les années dépliées au départ. « — » : conjoint décédé.
  */
-export function yearTable(s: Scenario, rows: YearResult[], real: boolean): string {
+export function yearTable(s: Scenario, rows: YearResult[], real: boolean, expanded: ReadonlySet<number> = new Set()): string {
   const d = deflate(s, real);
-  const sum = (y: YearResult, pick: (p: YearResult["spouses"][0]) => number) => y.spouses[0] ? pick(y.spouses[0]) + pick(y.spouses[1]) : 0;
-  const [n0, n1] = s.spouses.map((x) => x.name);
+  const sum = (y: YearResult, pick: (p: Sp) => number) => (y.spouses[0] ? pick(y.spouses[0]) + pick(y.spouses[1]) : 0);
   const sales = rows.some((y) => y.spouses[0].propertyProceeds + y.spouses[1].propertyProceeds > 0);      // colonnes ajoutées seulement si un immeuble est vendu
-  const head: { label: string; sub?: string }[] = [
-    { label: "Année" }, { label: "Âges" }, { label: "Rentes de régimes" }, { label: "RRQ" }, { label: "PSV" }, { label: "Retraits REER/FERR" },
-    { label: "Retraits CELI et non enr." }, ...(sales ? [{ label: "Vente d'immeubles" }, { label: "Gain en capital imposable" }] : []), { label: "Impôt" }, { label: "PSV récupérée" }, { label: "Pension fractionnée" },
-    { label: "Revenu imposable", sub: n0 }, { label: "Revenu imposable", sub: n1 }, { label: "Taux marginal", sub: n0 }, { label: "Taux marginal", sub: n1 },
-    { label: "Dépenses visées" }, { label: "Manque" }, { label: "Solde REER/FERR" }, { label: "Solde CELI" }, { label: "Solde non enr." },
+
+  // Une seule définition des colonnes sert à la ligne du ménage et à celle de chaque conjoint.
+  interface Col { label: string; total: (y: YearResult) => string | number; spouse: (y: YearResult, p: Sp) => string | number }
+  const col = (label: string, pick: (p: Sp) => number): Col => ({ label, total: (y) => d(y.year, sum(y, pick)), spouse: (y, p) => d(y.year, pick(p)) });
+  const columns: Col[] = [
+    col("Rentes de régimes", (p) => p.pensionIncome), col("RRQ", (p) => p.rrqIncome), col("PSV", (p) => p.psvIncome),
+    col("Retraits REER/FERR", (p) => p.reerWithdrawal), col("Retraits CELI et non enr.", (p) => p.celiWithdrawal + p.nonRegWithdrawal),
+    ...(sales ? [col("Vente d'immeubles", (p) => p.propertyProceeds), col("Gain en capital imposable", (p) => p.taxableCapitalGain)] : []),
+    col("Impôt", (p) => p.tax), col("PSV récupérée", (p) => p.psvClawback),
+    // Ménage : montant transféré; conjoint : signé, comme dans le CSV (+ reçu, − cédé).
+    { label: "Pension fractionnée", total: (y) => d(y.year, Math.max(y.spouses[0].pensionSplit, y.spouses[1].pensionSplit)), spouse: (y, p) => d(y.year, p.pensionSplit) },
+    col("Revenu imposable", (p) => p.taxableIncome),
+    // Le taux marginal est propre à chaque personne : rien pour le ménage.
+    { label: "Taux marginal", total: () => "", spouse: (_y, p) => fmtPct(p.marginalRate) },
+    // Conjoint : sa part de la dépense visée. Le manque se calcule pour le ménage seulement.
+    { label: "Dépenses visées", total: (y) => d(y.year, y.targetSpending), spouse: (y, p) => d(y.year, p.spending) },
+    { label: "Manque", total: (y) => d(y.year, y.shortfall), spouse: () => "" },
+    col("Solde REER/FERR", (p) => p.reerBalanceEnd), col("Solde CELI", (p) => p.celiBalanceEnd), col("Solde non enr.", (p) => p.nonRegBalanceEnd),
   ];
-  const taxable = (y: YearResult, i: 0 | 1) => (y.spouses[i].alive ? d(y.year, y.spouses[i].taxableIncome) : "—");
-  const marginal = (y: YearResult, i: 0 | 1) => (y.spouses[i].alive ? fmtPct(y.spouses[i].marginalRate) : "—");
+  const cell = (c: string | number) => `<td>${typeof c === "number" ? fmtNum(c) : esc(c)}</td>`;
+  const chevron = `<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
   const body = rows.map((y) => {
+    const open = expanded.has(y.year);
+    const ids = [`y${y.year}-0`, `y${y.year}-1`];
+    const button = `<button type="button" class="expander" data-action="toggle-year" data-year="${y.year}" aria-expanded="${open}" aria-controls="${ids.join(" ")}" aria-label="${open ? "Masquer" : "Afficher"} le détail par conjoint de ${y.year}">${chevron}</button>`;
     const ages = y.spouses.map((p) => (p.alive ? String(p.age) : "†")).join(" / ");
-    const split = Math.max(y.spouses[0].pensionSplit, y.spouses[1].pensionSplit);
-    const cells: (string | number)[] = [
-      String(y.year), ages,
-      d(y.year, sum(y, (p) => p.pensionIncome)), d(y.year, sum(y, (p) => p.rrqIncome)), d(y.year, sum(y, (p) => p.psvIncome)),
-      d(y.year, sum(y, (p) => p.reerWithdrawal)),
-      d(y.year, sum(y, (p) => p.celiWithdrawal + p.nonRegWithdrawal)),
-      ...(sales ? [d(y.year, sum(y, (p) => p.propertyProceeds)), d(y.year, sum(y, (p) => p.taxableCapitalGain))] : []),
-      d(y.year, sum(y, (p) => p.tax)), d(y.year, sum(y, (p) => p.psvClawback)),
-      d(y.year, split), taxable(y, 0), taxable(y, 1), marginal(y, 0), marginal(y, 1),
-      d(y.year, y.targetSpending), d(y.year, y.shortfall),
-      d(y.year, sum(y, (p) => p.reerBalanceEnd)), d(y.year, sum(y, (p) => p.celiBalanceEnd)), d(y.year, sum(y, (p) => p.nonRegBalanceEnd)),
-    ];
-    const cls = y.shortfall > 1 ? ' class="short"' : "";
-    return `<tr${cls}>${cells.map((c, i) => (i < 2 ? `<th scope="row"${i === 1 ? ' class="ages"' : ""}>${esc(String(c))}</th>` : `<td>${typeof c === "number" ? fmtNum(c) : esc(c)}</td>`)).join("")}</tr>`;
+    const parent = `<tr${y.shortfall > 1 ? ' class="short"' : ""} data-year="${y.year}"><th scope="row">${button}<span class="yr">${y.year}</span></th><th scope="row" class="ages">${esc(ages)}</th>${columns.map((c) => cell(c.total(y))).join("")}</tr>`;
+    const subs = y.spouses.map((p, i) => {
+      const name = s.spouses[i].name;
+      return `<tr class="sub" id="${ids[i]}" data-year="${y.year}"${open ? "" : " hidden"}><th scope="row" class="who" title="${esc(name)}">${esc(name)}<span class="sr-only"> en ${y.year}</span></th><th scope="row" class="ages">${p.alive ? p.age : "†"}</th>${columns.map((c) => cell(p.alive ? c.spouse(y, p) : "—")).join("")}</tr>`;
+    });
+    return parent + subs.join("");
   });
-  const th = (h: { label: string; sub?: string }, i: number) => `<th scope="col"${i > 1 ? ' class="num"' : ""}>${esc(h.label)}${h.sub ? `<span class="sub">${esc(h.sub)}</span>` : ""}</th>`;
+  const head = [{ label: "Année" }, { label: "Âges" }, ...columns];
+  const th = (h: { label: string }, i: number) => `<th scope="col"${i > 1 ? ' class="num"' : ""}>${esc(h.label)}</th>`;
   return `<div class="scroll"><table class="data year"><thead><tr>${head.map(th).join("")}</tr></thead><tbody>${body.join("")}</tbody></table></div>`;
 }
 

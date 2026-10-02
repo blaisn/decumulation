@@ -209,8 +209,8 @@ select#states { min-width: 340px; max-width: 100%; height: 34px; padding: 0 9px;
 .data.year thead th:nth-child(-n+2), .data.year tbody th:nth-child(-n+2) { position: sticky; }
 .data.year thead th:nth-child(-n+2) { z-index: 3; }
 .data.year tbody th:nth-child(-n+2) { z-index: 2; background: var(--row-bg, var(--panel)); }
-.data.year thead th:nth-child(1), .data.year tbody th:nth-child(1) { left: 0; min-width: 60px; }
-.data.year thead th:nth-child(2), .data.year tbody th:nth-child(2) { left: 60px; min-width: 66px; }
+.data.year thead th:nth-child(1), .data.year tbody th:nth-child(1) { left: 0; min-width: 104px; max-width: 104px; }
+.data.year thead th:nth-child(2), .data.year tbody th:nth-child(2) { left: 104px; min-width: 66px; }
 .data tr.short td, .data tr.short th { background: #f8e6e2; }
 .data tr.best td, .data tr.best th { background: #e3f0ec; }
 .data tr.best th { box-shadow: inset 3px 0 0 var(--action); font-weight: 600; }
@@ -242,3 +242,15 @@ select#states { min-width: 340px; max-width: 100%; height: 34px; padding: 0 9px;
 .data.optim tr.current th, .data.optim tr.current td { background: #fdf3df; }
 .data.optim td.chg { font-weight: 700; }
 .note.intro { max-width: 72ch; margin-bottom: 12px; font-size: 14px; }
+
+/* ---- Détail annuel : lignes dépliables par conjoint */
+.data.year .expander { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin: -2px 4px -2px -2px; padding: 0; vertical-align: middle; color: var(--muted); background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
+.data.year .expander:hover { color: var(--ink); background: var(--rule-soft); }
+.data.year .expander svg { transition: transform .12s ease; }
+.data.year .expander[aria-expanded="true"] svg { transform: rotate(90deg); }
+.data.year tr.sub { --row-bg: #edf2ee; }
+.data.year tr.sub th, .data.year tr.sub td { background-color: #edf2ee; font-size: 11.5px; color: var(--ink); }
+.data.year tr.sub th.who { padding-left: 30px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.data.year tr.sub th.who::before { content: ""; position: absolute; left: 12px; top: 0; bottom: 0; border-left: 2px solid var(--rule); }
+.data.year tr.sub:has(+ tr:not(.sub)) th.who::before, .data.year tr.sub:last-child th.who::before { bottom: 50%; }
+@media (prefers-reduced-motion: reduce) { .data.year .expander svg { transition: none; } }

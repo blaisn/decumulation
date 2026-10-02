@@ -27,6 +27,24 @@ import type { Job } from "../ui/src/compute";
 const tax = table2026 as unknown as TaxYearTable;
 const has = (text: string, part: string) => text.includes(part);
 
+/** Analyse le HTML du tableau annuel : en-têtes, et pour chaque ligne le type (ménage ou conjoint), l'année, l'âge et les cellules (texte affiché). */
+interface ParsedRow { sub: boolean; hidden: boolean; year: number; who: string; ages: string; short: boolean; cells: string[] }
+const decodeText = (t: string) => t.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/[\u00a0\u202f]/g, " ");
+function parseYearTable(html: string): { headers: string[]; rows: ParsedRow[] } {
+  const headers = [...html.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((m) => decodeText(m[1]));
+  const rows = html.split("<tbody>")[1].split("</tr>").filter((r) => r.includes("<tr")).map((r): ParsedRow => ({
+    sub: /<tr class="sub"/.test(r),
+    hidden: /<tr[^>]* hidden/.test(r),
+    year: Number(/data-year="(\d+)"/.exec(r)![1]),
+    who: decodeText(/<th scope="row" class="who"[^>]*>([^<]*)</.exec(r)?.[1] ?? ""),
+    ages: decodeText(/<th scope="row" class="ages">([^<]*)<\/th>/.exec(r)![1]),
+    short: /<tr class="short"/.test(r),
+    cells: [...r.matchAll(/<td>([^<]*)<\/td>/g)].map((m) => decodeText(m[1])),
+  }));
+  return { headers, rows };
+}
+const digitsOf = (t: string) => (/\d/.test(t) ? Number(t.replace(/[^\d-]/g, "")) : 0);       // « — » et vide valent 0
+
 describe("formulaire vers scénario", () => {
   it("les valeurs d'exemple donnent un scénario valide, en fractions", () => {
     const r = toScenario(defaultForm());
@@ -135,44 +153,138 @@ describe("export et affichage", () => {
     expect(has(src, 'class="outflow"')).toBe(true);
   });
   it("le tableau annuel sépare les rentes, la RRQ et la PSV, et leur somme reste celle des revenus garantis", () => {
-    const t = yearTable(s, rows, false);
-    const headers = [...t.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((m) => m[1]);
+    const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
     expect(headers.slice(0, 7)).toEqual(["Année", "Âges", "Rentes de régimes", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI et non enr."]);
     expect(headers.includes("Revenus garantis")).toBe(false);
     // 2033 : les deux conjoints touchent leurs rentes, la RRQ et la PSV
     const y = rows.find((r) => r.year === 2033)!;
-    const line = t.split("<tbody>")[1].split("</tr>").find((tr) => tr.includes("<th scope=\"row\">2033</th>"))!;
-    const cells = [...line.matchAll(/<td>([^<]*)<\/td>/g)].map((m) => Number(m[1].replace(/[^\d-]/g, "")));
+    const cells = lines.find((l) => !l.sub && l.year === 2033)!.cells.map(digitsOf);
     const pick = (f: (p: (typeof y.spouses)[0]) => number) => Math.round(f(y.spouses[0]) + f(y.spouses[1]));
     expect(cells[0]).toBe(pick((p) => p.pensionIncome));
     expect(cells[1]).toBe(pick((p) => p.rrqIncome));
     expect(cells[2]).toBe(pick((p) => p.psvIncome));
     expect(cells[0] + cells[1] + cells[2]).toBeCloseTo(pick((p) => p.guaranteedIncome), -1);
   });
-  it("le tableau annuel donne le revenu imposable et le taux marginal de chaque conjoint, « — » après un décès", () => {
-    const t = yearTable(s, rows, false);
-    const headers = [...t.matchAll(/<th scope="col"[^>]*>([^<]*)(?:<span class="sub">([^<]*)<\/span>)?<\/th>/g)].map((m) => (m[2] ? `${m[1]} / ${m[2]}` : m[1]));
-    const i = headers.indexOf("Pension fractionnée");
-    expect(headers.slice(i + 1, i + 5)).toEqual(["Revenu imposable / &lt;b&gt;&quot;Alex&quot;&lt;/b&gt;", "Revenu imposable / Sam", "Taux marginal / &lt;b&gt;&quot;Alex&quot;&lt;/b&gt;", "Taux marginal / Sam"]);
-    const line = (year: number) => t.split("<tbody>")[1].split("</tr>").find((tr) => tr.includes(`<th scope="row">${year}</th>`))!;
-    const cells = (year: number) => [...line(year).matchAll(/<td>([^<]*)<\/td>/g)].map((m) => m[1].replace(/[\u00a0\u202f]/g, " "));
-    const a = cells(2033);     // les deux conjoints vivants
-    const y = rows.find((r) => r.year === 2033)!;
-    const digits = (x: string) => x.replace(/[^\d-]/g, "");
-    expect(digits(a[8])).toBe(String(Math.round(y.spouses[0].taxableIncome)));
-    expect(digits(a[9])).toBe(String(Math.round(y.spouses[1].taxableIncome)));
-    expect(a[10]).toMatch(/^\d{2},\d{2} %$/);
-    expect(a[11]).toMatch(/^\d{2},\d{2} %$/);
-    const b = cells(2050);     // Alex est décédé depuis 2042
-    expect(b[8]).toBe("—");
-    expect(b[10]).toBe("—");
-    expect(digits(b[9]).length).toBeGreaterThan(0);
-    expect(b[11]).toMatch(/^\d{2},\d{2} %$/);
+  it("le tableau annuel n'a plus de colonnes par conjoint : « Revenu imposable » et « Taux marginal » une seule fois chacune", () => {
+    const { headers } = parseYearTable(yearTable(s, rows, false));
+    expect(headers.filter((h) => h === "Revenu imposable").length).toBe(1);
+    expect(headers.filter((h) => h === "Taux marginal").length).toBe(1);
+    expect(headers.length).toBe(17);
+    expect(headers.some((h) => /Alex|Sam/.test(h))).toBe(false);
+    expect(headers.indexOf("Revenu imposable")).toBe(headers.indexOf("Pension fractionnée") + 1);
+    expect(headers.indexOf("Taux marginal")).toBe(headers.indexOf("Revenu imposable") + 1);
   });
-  it("le tableau annuel a une ligne par année et marque les décès", () => {
+  it("ligne du ménage : revenu imposable total, taux marginal vide (il est propre à chaque personne)", () => {
+    const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
+    const iTax = headers.indexOf("Revenu imposable") - 2, iRate = headers.indexOf("Taux marginal") - 2;
+    const y = rows.find((r) => r.year === 2033)!;
+    const parent = lines.find((l) => !l.sub && l.year === 2033)!;
+    expect(digitsOf(parent.cells[iTax])).toBe(Math.round(y.spouses[0].taxableIncome + y.spouses[1].taxableIncome));
+    expect(parent.cells[iRate]).toBe("");
+  });
+  it("chaque année a une ligne de ménage suivie d'une ligne par conjoint, masquées par défaut, avec le prénom et l'âge", () => {
+    const { rows: lines } = parseYearTable(yearTable(s, rows, false));
+    expect(lines.length).toBe(rows.length * 3);
+    expect(lines.filter((l) => !l.sub).length).toBe(rows.length);
+    for (let k = 0; k < lines.length; k += 3) {
+      expect([lines[k].sub, lines[k + 1].sub, lines[k + 2].sub]).toEqual([false, true, true]);
+      expect([lines[k + 1].year, lines[k + 2].year]).toEqual([lines[k].year, lines[k].year]);
+      expect([lines[k + 1].hidden, lines[k + 2].hidden]).toEqual([true, true]);
+    }
+    const y2033 = lines.filter((l) => l.year === 2033);
+    expect(y2033.map((l) => l.who)).toEqual(["", '<b>"Alex"</b>', "Sam"]);
+    expect(y2033.map((l) => l.ages)).toEqual(["73 / 71", "73", "71"]);
+  });
+  it("ligne d'un conjoint : son revenu imposable, son taux marginal, sa part des dépenses et ses soldes", () => {
+    const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
+    const at = (name: string) => headers.indexOf(name) - 2;
+    const y = rows.find((r) => r.year === 2033)!;
+    const [a, b] = lines.filter((l) => l.year === 2033 && l.sub);
+    expect(digitsOf(a.cells[at("Revenu imposable")])).toBe(Math.round(y.spouses[0].taxableIncome));
+    expect(digitsOf(b.cells[at("Revenu imposable")])).toBe(Math.round(y.spouses[1].taxableIncome));
+    expect(a.cells[at("Taux marginal")]).toMatch(/^\d{2},\d{2} %$/);
+    expect(b.cells[at("Taux marginal")]).toMatch(/^\d{2},\d{2} %$/);
+    expect(digitsOf(a.cells[at("Dépenses visées")])).toBe(Math.round(y.spouses[0].spending));
+    expect(digitsOf(b.cells[at("Solde REER/FERR")])).toBe(Math.round(y.spouses[1].reerBalanceEnd));
+    expect(a.cells[at("Manque")]).toBe("");                       // le manque se calcule pour le ménage seulement
+  });
+  it("ligne d'un conjoint : la pension fractionnée est signée (+ reçue, − cédée), comme dans le CSV", () => {
+    const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
+    const i = headers.indexOf("Pension fractionnée") - 2;
+    const y = rows.find((r) => r.year === 2033)!;
+    expect(y.spouses[0].pensionSplit).not.toBe(0);
+    const [a, b] = lines.filter((l) => l.year === 2033 && l.sub);
+    expect(digitsOf(a.cells[i])).toBe(Math.round(y.spouses[0].pensionSplit));
+    expect(digitsOf(b.cells[i])).toBe(Math.round(y.spouses[1].pensionSplit));
+    expect(Math.sign(digitsOf(a.cells[i])) * Math.sign(digitsOf(b.cells[i]))).toBe(-1);     // l'un cède, l'autre reçoit
+    const parent = lines.find((l) => !l.sub && l.year === 2033)!;
+    expect(digitsOf(parent.cells[i])).toBe(Math.round(Math.max(y.spouses[0].pensionSplit, y.spouses[1].pensionSplit)));
+  });
+  it("après un décès, la ligne du conjoint décédé affiche † et « — »", () => {
+    const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
+    const at = (name: string) => headers.indexOf(name) - 2;
+    const [a, b] = lines.filter((l) => l.year === 2050 && l.sub);     // Alex est décédé depuis 2042
+    expect(a.ages).toBe("†");
+    expect(a.cells.every((c) => c === "—")).toBe(true);
+    expect(b.ages).toMatch(/^\d+$/);
+    expect(b.cells[at("Taux marginal")]).toMatch(/^\d{2},\d{2} %$/);
+    expect(lines.find((l) => !l.sub && l.year === 2050)!.ages).toMatch(/^† \/ \d+$/);
+  });
+  it("le total du ménage est la somme des deux conjoints, colonne par colonne et année par année", () => {
+    const { headers, rows: lines } = parseYearTable(yearTable(s, rows, false));
+    const additive = ["Rentes de régimes", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI et non enr.", "Impôt", "PSV récupérée", "Revenu imposable", "Dépenses visées", "Solde REER/FERR", "Solde CELI", "Solde non enr."];
+    expect(additive.every((h) => headers.includes(h))).toBe(true);
+    let compared = 0;
+    for (const parent of lines.filter((l) => !l.sub)) {
+      const [a, b] = lines.filter((l) => l.sub && l.year === parent.year);
+      for (const h of additive) {
+        const i = headers.indexOf(h) - 2;
+        expect(Math.abs(digitsOf(parent.cells[i]) - digitsOf(a.cells[i]) - digitsOf(b.cells[i]))).toBeLessThanOrEqual(1);       // arrondis
+        compared++;
+      }
+    }
+    expect(compared).toBe(rows.length * additive.length);
+  });
+  it("les années dépliées au départ n'ont plus l'attribut « hidden »; le bouton annonce son état", () => {
+    const { rows: lines } = parseYearTable(yearTable(s, rows, false, new Set([2033])));
+    expect(lines.filter((l) => l.sub && !l.hidden).map((l) => l.year)).toEqual([2033, 2033]);
+    const html = yearTable(s, rows, false, new Set([2033]));
+    expect(html).toContain('data-year="2033" aria-expanded="true"');
+    expect(html).toContain('aria-label="Masquer le détail par conjoint de 2033"');
+    expect(html).toContain('data-year="2034" aria-expanded="false"');
+    expect(html).toContain('aria-label="Afficher le détail par conjoint de 2034"');
+  });
+  it("accessibilité : chaque bouton désigne ses deux lignes, qui existent, et le prénom est complété par l'année", () => {
+    const html = yearTable(s, rows, false);
+    const buttons = [...html.matchAll(/<button type="button" class="expander" data-action="toggle-year" data-year="(\d+)" aria-expanded="(true|false)" aria-controls="([^"]+)"/g)];
+    expect(buttons.length).toBe(rows.length);
+    for (const [, year, , controls] of buttons) {
+      const ids = controls.split(" ");
+      expect(ids).toEqual([`y${year}-0`, `y${year}-1`]);
+      for (const id of ids) expect(html).toContain(`<tr class="sub" id="${id}"`);
+    }
+    expect(html).toContain('<span class="sr-only"> en 2033</span>');
+    expect(html).toContain('title="Sam"');
+  });
+  it("le tableau annuel a une ligne de ménage par année et marque les décès", () => {
     const t = yearTable(s, rows, true);
-    expect(t.split("<tr").length - 1).toBe(rows.length + 1);
+    expect(parseYearTable(t).rows.filter((l) => !l.sub).length).toBe(rows.length);
     expect(has(t, "†")).toBe(true);
+    expect(parseYearTable(t).rows.some((l) => l.short)).toBe(false);          // ce scénario finance toutes les dépenses
+  });
+  it("en dollars constants, les lignes des conjoints sont ramenées aux dollars de départ comme celles du ménage", () => {
+    const nominal = parseYearTable(yearTable(s, rows, false)), real = parseYearTable(yearTable(s, rows, true));
+    const i = nominal.headers.indexOf("Revenu imposable") - 2;
+    const f = Math.pow(1 + s.assumptions.inflation, 2033 - s.assumptions.startYear);
+    for (const idx of [0, 1, 2]) {
+      const n = digitsOf(nominal.rows.filter((l) => l.year === 2033)[idx].cells[i]), r = digitsOf(real.rows.filter((l) => l.year === 2033)[idx].cells[i]);
+      expect(Math.abs(r - n / f)).toBeLessThanOrEqual(1);
+    }
+  });
+  it("les prénoms sont échappés dans les lignes des conjoints", () => {
+    const html = yearTable(s, rows, false);
+    expect(html).not.toContain('<b>"Alex"</b>');
+    expect(html).toContain("&lt;b&gt;&quot;Alex&quot;&lt;/b&gt;");
   });
   it("le tableau des stratégies regroupe les résultats identiques", () => {
     const amounts = (estate: number, k = 1) => ({ totalTax: 100 * k, totalClawback: 0, totalShortfall: 0, finalReer: 0, finalCeli: 0, finalNonReg: 0, afterTaxEstate: estate * k });
@@ -1165,35 +1277,42 @@ describe("immeubles : résultats", () => {
     expect(csv.find((l) => l[0] === "2030" && l[1] === "Sam")![24]).toBe("600000");
     expect(csv.find((l) => l[0] === "2030" && l[1] === "Sam")![25]).toBe("200000");
   });
-  const heads = (html: string) => [...html.matchAll(/<th scope="col"[^>]*>([^<]*)(?:<span class="sub">[^<]*<\/span>)?<\/th>/g)].map((m) => plain(m[1]));
+  const heads = (html: string) => parseYearTable(html).headers;
 
   it("tableau annuel : sans vente, aucune colonne ajoutée", () => {
     const none = sc();
     const h = heads(yearTable(none, runProjection(none, tax), false));
     expect(h).not.toContain("Vente d'immeubles");
     expect(h).not.toContain("Gain en capital imposable");
-    expect(h.length).toBe(19);
+    expect(h.length).toBe(17);
   });
   it("tableau annuel : avec une vente, deux colonnes après les retraits, avec les montants de l'année de la vente", () => {
-    const html = yearTable(scenario, rows, false);
-    const h = heads(html);
-    expect(h.length).toBe(21);
+    const { headers: h, rows: lines } = parseYearTable(yearTable(scenario, rows, false));
+    expect(h.length).toBe(19);
     const i = h.indexOf("Vente d'immeubles");
     expect(i).toBe(h.indexOf("Retraits CELI et non enr.") + 1);
     expect(h[i + 1]).toBe("Gain en capital imposable");
-    const tr = html.split("<tbody>")[1].split("</tr>").find((r) => r.includes('<th scope="row">2030</th>'))!;
-    const cells = [...tr.matchAll(/<td>([^<]*)<\/td>/g)].map((m) => plain(m[1]));
-    expect(cells[i - 2]).toBe("600 000");
-    expect(cells[i - 1]).toBe("200 000");
-    const other = html.split("<tbody>")[1].split("</tr>").find((r) => r.includes('<th scope="row">2031</th>'))!;
-    expect([...other.matchAll(/<td>([^<]*)<\/td>/g)].map((m) => plain(m[1]))[i - 2]).toBe("0");
+    const at = (year: number, k: number) => lines.filter((l) => l.year === year)[k];
+    // ménage, puis chaque conjoint
+    expect([at(2030, 0).cells[i - 2], at(2030, 0).cells[i - 1]]).toEqual(["600 000", "200 000"]);
+    expect([at(2030, 1).cells[i - 2], at(2030, 1).cells[i - 1]]).toEqual(["300 000", "100 000"]);
+    expect([at(2030, 2).cells[i - 2], at(2030, 2).cells[i - 1]]).toEqual(["300 000", "100 000"]);
+    expect(at(2031, 0).cells[i - 2]).toBe("0");
+  });
+  it("tableau annuel : un seul propriétaire reçoit tout le produit sur sa ligne, l'autre conjoint 0", () => {
+    const one = sc(chalet({ owner: "1" }));
+    const { headers: h, rows: lines } = parseYearTable(yearTable(one, runProjection(one, tax), false));
+    const i = h.indexOf("Vente d'immeubles") - 2;
+    const [parent, a, b] = lines.filter((l) => l.year === 2030);
+    expect([parent.cells[i], a.cells[i], b.cells[i]]).toEqual(["600 000", "0", "600 000"]);
   });
   it("tableau annuel : en dollars constants, le produit de la vente est ramené aux dollars de départ", () => {
-    const html = yearTable(scenario, rows, true);
-    const tr = html.split("<tbody>")[1].split("</tr>").find((r) => r.includes('<th scope="row">2030</th>'))!;
-    const i = heads(html).indexOf("Vente d'immeubles");
-    const v = Number(plain([...tr.matchAll(/<td>([^<]*)<\/td>/g)][i - 2][1]).replace(/\D/g, ""));
-    expect(Math.abs(v - Math.round(600000 / Math.pow(1.02, 4)))).toBeLessThanOrEqual(1);
+    const { headers: h, rows: lines } = parseYearTable(yearTable(scenario, rows, true));
+    const i = h.indexOf("Vente d'immeubles") - 2;
+    const f = Math.pow(1.02, 4);
+    const [parent, a] = lines.filter((l) => l.year === 2030);
+    expect(Math.abs(digitsOf(parent.cells[i]) - Math.round(600000 / f))).toBeLessThanOrEqual(1);
+    expect(Math.abs(digitsOf(a.cells[i]) - Math.round(300000 / f))).toBeLessThanOrEqual(1);
   });
   it("graphique « D'où vient l'argent » : le produit de la vente est une source, dans l'année de la vente seulement", () => {
     const d = sourcesData(scenario, rows, false);
