@@ -1,6 +1,6 @@
 import table2026 from "../../src/engine/data/tax-2026.json";
 import { psvFactor, rrqFactor } from "../../src/index";
-import type { BenefitChoice, CompareOptions, DbPension, Property, Scenario, SpouseInput, Strategy } from "../../src/index";
+import type { BenefitChoice, CompareOptions, DbPension, ExtraExpense, Property, Scenario, SpouseInput, Strategy } from "../../src/index";
 import { fmtMoney } from "./format";
 
 // L'état du formulaire garde les valeurs telles que saisies (texte); la conversion se fait dans `toScenario`.
@@ -34,6 +34,12 @@ export interface PropertyForm {
   saleYear: string; // vide : pas de vente pendant le plan
   salePrice: string; // en dollars courants de l'année de vente
 }
+/** Dépense supplémentaire saisie dans le formulaire : montant net en dollars de l'année de départ, indexé jusqu'à son année. */
+export interface ExtraExpenseForm {
+  label: string;
+  year: string; // à partir de l'année de départ
+  amount: string;
+}
 export interface FormState {
   version: 1;
   spending: string;
@@ -42,6 +48,7 @@ export interface FormState {
   nonRegTaxRate: string;
   spouses: [SpouseForm, SpouseForm];
   properties: PropertyForm[];
+  extraExpenses: ExtraExpenseForm[];
   strategy: StrategyForm;
 }
 
@@ -68,6 +75,7 @@ export function defaultForm(): FormState {
     nonRegTaxRate: "10",
     spouses: [spouse("Alex", "1960", "45000", "50"), spouse("Sam", "1962", "25000")],
     properties: [],
+    extraExpenses: [],
     strategy: { kind: "reer-first", ceiling: "90000", usePsvThreshold: true, untilAge: "" },
   };
 }
@@ -113,11 +121,37 @@ export function newProperty(startYear = "2026"): PropertyForm {
   return { label: "", owner: "both", principalResidence: false, purchaseYear: String(Number.isFinite(y) ? y - 15 : 2011), purchasePrice: "", saleYear: "", salePrice: "" };
 }
 
+/** Nouvelle dépense supplémentaire : cinq ans après le début du plan, montant nul (sans effet tant qu'on ne le remplit pas). */
+export function newExtraExpense(startYear = "2026"): ExtraExpenseForm {
+  const y = parseInt(startYear, 10);
+  return { label: "", year: String(Number.isFinite(y) ? y + 5 : 2031), amount: "0" };
+}
+
 /** Part imposable d'un gain en capital (table fiscale 2026). */
 export const CAPITAL_GAINS_INCLUSION = (table2026 as unknown as { capitalGainsInclusion: number }).capitalGainsInclusion;
 
 /** Nombre d'immeubles désignés « résidence principale » : une famille ne peut en désigner qu'une par année. */
 export const principalResidenceCount = (f: FormState) => f.properties.filter((p) => p.principalResidence).length;
+
+/**
+ * Aperçu d'une dépense supplémentaire : montant en dollars courants de son année, ou avertissement.
+ * Chaîne vide tant que l'année ou le montant n'est pas valide.
+ */
+export function extraExpenseHint(f: FormState, j: number): string {
+  const e = f.extraExpenses[j];
+  if (!e) return "";
+  const startYear = parseNumber(f.assumptions.startYear), inflation = parseNumber(f.assumptions.inflation) / 100;
+  const year = parseNumber(e.year), amount = parseNumber(e.amount);
+  if (!Number.isInteger(year) || !Number.isFinite(amount) || amount < 0 || !Number.isFinite(startYear) || !Number.isFinite(inflation) || year < startYear) return "";
+  if (amount === 0) return "Montant nul : cette dépense n'a aucun effet.";
+  let text = `Soit ${fmtMoney(amount * Math.pow(1 + inflation, year - startYear))} en dollars courants de ${year}, après impôt.`;
+  const births = f.spouses.map((s) => parseNumber(s.birthYear)), endAge = parseNumber(f.assumptions.endAge);
+  if (births.every(Number.isFinite) && Number.isFinite(endAge)) {
+    const lastYear = Math.max(...births) + endAge;
+    if (year > lastYear) text += ` Cette dépense a lieu après la fin du plan (${lastYear}) : elle n'a aucun effet.`;
+  }
+  return text;
+}
 
 /**
  * Aperçu d'un immeuble : prix de vente en dollars de départ, gain en capital et impôt, ou avertissement.
@@ -213,6 +247,15 @@ export function toScenario(f: FormState): Parsed {
     };
   }) as [SpouseInput, SpouseInput];
 
+  // Dépenses supplémentaires : montants nets, en dollars de l'année de départ, à partir de cette année-là.
+  const extraExpenses = f.extraExpenses.map((e, j): ExtraExpense => {
+    const L = (x: string) => `Dépense supplémentaire ${j + 1}${e.label.trim() ? ` (${e.label.trim()})` : ""} : ${x}`;
+    const year = need(L("année"), e.year, { int: true, min: 1800, max: 2200 });
+    if (e.year.trim() !== "" && Number.isFinite(year) && startYear > 0 && year < startYear) errors.push(L(`année ${year} : elle doit être à partir du début du plan (${startYear}).`));
+    const amount = need(L("montant"), e.amount, { min: 0 });
+    return { label: e.label.trim() || `Dépense ${j + 1}`, year, amount };
+  });
+
   // Immeubles : achetés avant le début du plan (l'achat pendant le plan n'est pas encore pris en charge), sans hypothèque.
   const properties = f.properties.map((p, j): Property => {
     const name = p.label.trim() || `Immeuble ${j + 1}`;
@@ -257,6 +300,7 @@ export function toScenario(f: FormState): Parsed {
     targetNetSpending: spending,
     firstSpouseSpendingShare: share0,
     ...(properties.length ? { properties } : {}),
+    ...(extraExpenses.length ? { extraExpenses } : {}),
     strategy,
     assumptions: {
       startYear, endAge,
@@ -313,6 +357,7 @@ export function formFromJson(text: string): FormState {
     const merged = mergeStr(newProperty(str(src.assumptions?.startYear, d.assumptions.startYear)), p);
     return { ...merged, owner: (["both", "0", "1"] as const).includes(merged.owner) ? merged.owner : "both" } as PropertyForm;
   });
+  const extraExpenses = (Array.isArray(src.extraExpenses) ? src.extraExpenses : []).map((e) => mergeStr(newExtraExpense(str(src.assumptions?.startYear, d.assumptions.startYear)), e) as ExtraExpenseForm);
   return {
     version: 1,
     spending: str(src.spending, d.spending),
@@ -321,6 +366,7 @@ export function formFromJson(text: string): FormState {
     nonRegTaxRate: str(src.nonRegTaxRate, d.nonRegTaxRate),
     spouses,
     properties,
+    extraExpenses,
     strategy: mergeStr(d.strategy, src.strategy),
   };
 }
@@ -394,6 +440,7 @@ export function describeChanges(base: FormState, cur: FormState): string[] {
     const last = KEY_LABELS[seg[seg.length - 1]] ?? seg[seg.length - 1];
     if (seg[0] === "spouses" && seg[2] === "pensions") return `${who(seg[1])}, rente ${+seg[3] + 1} (${last})`;
     if (seg[0] === "properties") return `Immeuble ${+seg[1] + 1} (${last})`;
+    if (seg[0] === "extraExpenses") return `Dépense supplémentaire ${+seg[1] + 1} (${({ label: "nom", year: "année", amount: "montant" } as Record<string, string>)[seg[2]] ?? seg[2]})`;
     // Minuscule initiale, sauf pour les sigles (REER/FERR, CELI, RRQ, PSV).
     const lower = /^[A-ZÀ-Ý][a-zà-ÿ]/.test(last) ? last.charAt(0).toLowerCase() + last.slice(1) : last;
     if (seg[0] === "spouses") return `${who(seg[1])}, ${lower}`;
@@ -406,6 +453,12 @@ export function describeChanges(base: FormState, cur: FormState): string[] {
     if (m) {
       const key = `${verb}${m[1]}.${m[2]}`;
       if (!pensionNoted.has(key)) { pensionNoted.add(key); out.push(`${who(m[1])} : rente ${+m[2] + 1} ${verb}`); }
+      return true;
+    }
+    const e = /^extraExpenses\.(\d+)\./.exec(path);
+    if (e) {
+      const key = `depense${verb}${e[1]}`;
+      if (!pensionNoted.has(key)) { pensionNoted.add(key); out.push(`Dépense supplémentaire ${+e[1] + 1} ${verb}`); }
       return true;
     }
     const q = /^properties\.(\d+)\./.exec(path);

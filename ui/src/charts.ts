@@ -136,13 +136,13 @@ export function sourcesData(s: Scenario, rows: YearResult[], real: boolean): Sou
   return {
     keys,
     stacks: rows.map((y) => keys.reduce((a, k) => a + d(y.year, k.v(y)), 0)),
-    outflow: rows.map((y) => d(y.year, y.targetSpending + total(y, (p) => p.tax + p.psvClawback))),
+    outflow: rows.map((y) => d(y.year, y.targetSpending + y.extraSpending + total(y, (p) => p.tax + p.psvClawback))),
     shortfall: rows.map((y) => d(y.year, y.shortfall)),
     contributions: rows.map((y) => d(y.year, total(y, (p) => p.celiContribution + p.nonRegContribution))),
   };
 }
 
-/** D'où vient l'argent chaque année, avec la ligne « dépenses visées + impôt » : ce qui dépasse est réinvesti, ce qui manque est en rouge. */
+/** D'où vient l'argent chaque année, avec la ligne « dépenses visées + dépenses supplémentaires + impôt » : ce qui dépasse est réinvesti, ce qui manque est en rouge. */
 export function sourcesChart(s: Scenario, rows: YearResult[], real: boolean): string {
   if (!rows.length) return "";
   const d = deflate(s, real);
@@ -174,12 +174,12 @@ export function sourcesChart(s: Scenario, rows: YearResult[], real: boolean): st
       body += `<rect class="s-short" x="${(xs(y.year) - bw / 2).toFixed(1)}" y="${ys(outflow[k]).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, ys(stacks[k]) - ys(outflow[k])).toFixed(1)}"/>`;
       tip += `MANQUE ${fmtNum(shortfall[k])} $; `;
     }
-    body += `<rect class="hit" x="${(xs(y.year) - PLOT_W / rows.length / 2).toFixed(1)}" y="${top}" width="${(PLOT_W / rows.length).toFixed(1)}" height="${H}"><title>${esc(tip)}dépenses visées + impôt ${esc(fmtNum(outflow[k]))} $</title></rect>`;
+    body += `<rect class="hit" x="${(xs(y.year) - PLOT_W / rows.length / 2).toFixed(1)}" y="${top}" width="${(PLOT_W / rows.length).toFixed(1)}" height="${H}"><title>${esc(tip)}dépenses + impôt ${esc(fmtNum(outflow[k]))} $</title></rect>`;
   });
   body += `<polyline class="outflow" fill="none" points="${rows.map((y, k) => `${xs(y.year).toFixed(1)},${ys(outflow[k]).toFixed(1)}`).join(" ")}"/>`;
 
   const first = rows.find((y) => y.shortfall > 1);
-  const label = `Revenus par source de ${y0} à ${y1}, comparés aux dépenses visées et à l'impôt${first ? `; les dépenses visées ne sont pas toutes financées à partir de ${first.year}` : ""}.`;
+  const label = `Revenus par source de ${y0} à ${y1}, comparés aux dépenses (visées et supplémentaires) et à l'impôt${first ? `; les dépenses visées ne sont pas toutes financées à partir de ${first.year}` : ""}.`;
   return `<svg class="chart" viewBox="0 0 ${W} ${height}" role="img" aria-label="${esc(label)}">${body}</svg>`;
 }
 

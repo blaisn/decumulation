@@ -1347,3 +1347,113 @@ describe("fractionnement du revenu de pension : règles dans les projections", (
     }
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("dépenses supplémentaires", () => {
+  type Sp = Scenario["spouses"][0];
+  const person = (name: string, birthYear: number, o: { deathAge?: number; reer?: number; celi?: number; db?: number } = {}): Sp => ({
+    name, birthYear, deathAge: o.deathAge, dbPensions: o.db ? [{ label: "RPA", annualAmount: o.db, startAge: 60, indexation: 0.02, survivorPct: 0.6 }] : [],
+    rrq: { annualAmount: 14000, startAge: 65 }, psv: { annualAmount: 8700, startAge: 65 }, reer: o.reer ?? 600000, celi: o.celi ?? 90000, celiRoom: 40000,
+  });
+  const scen = (extras: Scenario["extraExpenses"], a = person("A", 1960, { db: 40000 }), b = person("B", 1962, { db: 20000 }), spending = 90000, share?: number): Scenario => ({
+    spouses: [a, b], targetNetSpending: spending, firstSpouseSpendingShare: share, extraExpenses: extras,
+    assumptions: { startYear: 2026, endAge: 95, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 },
+  });
+  const at = (rows: ReturnType<typeof runProjection>, year: number) => rows.find((y) => y.year === year)!;
+  const voiture = { label: "Voiture", year: 2030, amount: 40000 };
+  const sum = (y: ReturnType<typeof at>, f: (p: ReturnType<typeof at>["spouses"][0]) => number) => f(y.spouses[0]) + f(y.spouses[1]);
+
+  it("la dépense est indexée à l'inflation jusqu'à son année, et seulement cette année-là", () => {
+    const rows = runProjection(scen([voiture]), tax);
+    expect(at(rows, 2030).extraSpending).toBeCloseTo(40000 * Math.pow(1.02, 4), 6);
+    for (const y of rows) if (y.year !== 2030) expect(y.extraSpending).toBe(0);
+  });
+  it("le revenu requis est la somme de la dépense visée et de la dépense supplémentaire; la dépense visée ne change pas", () => {
+    const base = runProjection(scen([]), tax), rows = runProjection(scen([voiture]), tax);
+    const y = at(rows, 2030);
+    expect(y.targetSpending).toBeCloseTo(at(base, 2030).targetSpending, 6);
+    expect(y.netIncome).toBeCloseTo(y.targetSpending + y.extraSpending, 6);               // tout est financé : le revenu net atteint la somme
+    expect(y.shortfall).toBe(0);
+    expect(at(rows, 2031).netIncome).toBeCloseTo(at(rows, 2031).targetSpending, 6);
+  });
+  it("il faut retirer davantage cette année-là : plus de retraits du REER, plus d'impôt", () => {
+    const base = at(runProjection(scen([]), tax), 2030), y = at(runProjection(scen([voiture]), tax), 2030);
+    const reer = (r: typeof y) => sum(r, (p) => p.reerWithdrawal), impot = (r: typeof y) => sum(r, (p) => p.tax);
+    expect(reer(y)).toBeGreaterThan(reer(base) + y.extraSpending);                         // le montant net, plus l'impôt sur le retrait
+    expect(impot(y)).toBeGreaterThan(impot(base));
+    expect(reer(y) - reer(base)).toBeLessThan(y.extraSpending * 2);                        // sans dépasser le double
+  });
+  it("conservation de l'argent : revenus + manque = impôt + dépenses visées + dépenses supplémentaires + argent placé, chaque année", () => {
+    for (const s of [scen([voiture]), scen([voiture, { label: "Toit", year: 2033, amount: 25000 }], person("A", 1960, { db: 40000, deathAge: 75 })), scen([{ label: "Gros", year: 2040, amount: 900000 }])]) {
+      for (const y of runProjection(s, tax)) {
+        const cashIn = sum(y, (p) => p.pensionIncome + p.rrqIncome + p.psvIncome + p.reerWithdrawal + p.celiWithdrawal + p.nonRegWithdrawal + p.nonRegIncome + p.propertyProceeds);
+        const out = sum(y, (p) => p.tax + p.psvClawback) + y.targetSpending + y.extraSpending + sum(y, (p) => p.celiContribution + p.nonRegContribution);
+        expect(Math.abs(cashIn + y.shortfall - out)).toBeLessThan(1e-4);
+      }
+    }
+  });
+  it("plusieurs dépenses de la même année s'additionnent", () => {
+    const y = at(runProjection(scen([voiture, { label: "Toit", year: 2030, amount: 25000 }, { label: "Autre", year: 2031, amount: 5000 }]), tax), 2030);
+    expect(y.extraSpending).toBeCloseTo(65000 * Math.pow(1.02, 4), 6);
+  });
+  it("les dépenses avant le début du plan ou après sa fin n'ont aucun effet", () => {
+    const sans = JSON.stringify(runProjection(scen([]), tax));
+    expect(JSON.stringify(runProjection(scen(undefined), tax))).toBe(sans);
+    expect(JSON.stringify(runProjection(scen([{ label: "x", year: 2020, amount: 50000 }]), tax))).toBe(sans);
+    expect(JSON.stringify(runProjection(scen([{ label: "x", year: 2090, amount: 50000 }]), tax))).toBe(sans);
+    expect(JSON.stringify(runProjection(scen([{ label: "x", year: 2030, amount: 0 }]), tax))).toBe(sans);
+  });
+  it("sans dépense supplémentaire, tous les montants supplémentaires sont nuls", () => {
+    const rows = runProjection(scen(undefined), tax);
+    expect(rows.every((y) => y.extraSpending === 0 && y.spouses.every((p) => p.extraSpending === 0))).toBe(true);
+  });
+  it("après un décès, la dépense n'est pas réduite comme la dépense annuelle : le survivant l'assume en entier", () => {
+    const s = scen([{ label: "x", year: 2040, amount: 30000 }], person("A", 1960, { db: 40000, deathAge: 75 }));      // A décède fin 2035
+    const y = at(runProjection(s, tax), 2040);
+    expect(y.spouses[0].alive).toBe(false);
+    expect(y.extraSpending).toBeCloseTo(30000 * Math.pow(1.02, 14), 6);                          // 100 % du montant indexé
+    expect(y.targetSpending).toBeCloseTo(0.75 * 90000 * Math.pow(1.02, 14), 6);                  // alors que la dépense annuelle est réduite à 75 %
+    expect(y.spouses[0].extraSpending).toBe(0);
+    expect(y.spouses[1].extraSpending).toBeCloseTo(y.extraSpending, 6);
+  });
+  it("la dépense se répartit entre les conjoints selon leur part des dépenses, comme la dépense visée", () => {
+    const y = at(runProjection(scen([voiture], undefined, undefined, 90000, 0.7), tax), 2030);
+    expect(y.spouses[0].extraSpending).toBeCloseTo(0.7 * y.extraSpending, 6);
+    expect(y.spouses[1].extraSpending).toBeCloseTo(0.3 * y.extraSpending, 6);
+    expect(y.spouses[0].extraSpending + y.spouses[1].extraSpending).toBeCloseTo(y.extraSpending, 6);
+    expect(y.spouses[0].extraSpending / y.spouses[0].spending).toBeCloseTo(y.extraSpending / y.targetSpending, 8);
+  });
+  it("une dépense supérieure aux actifs crée un manque cette année-là, qui s'ajoute à ceux des années suivantes", () => {
+    const poor = (n: string, b: number) => person(n, b, { reer: 80000, celi: 10000, db: 20000 });
+    const rows = runProjection(scen([{ label: "Gros", year: 2028, amount: 400000 }], poor("A", 1960), poor("B", 1962), 60000), tax);
+    const y = at(rows, 2028);
+    expect(y.shortfall).toBeGreaterThan(200000);
+    expect(y.netIncome).toBeCloseTo(y.targetSpending + y.extraSpending - y.shortfall, 6);
+    expect(at(runProjection(scen([], poor("A", 1960), poor("B", 1962), 60000), tax), 2028).shortfall).toBeLessThan(1);
+    expect(rows.find((r) => r.year === 2027)!.shortfall).toBeLessThan(1);                    // avant la dépense : tout allait bien
+  });
+  it("la dépense réduit le patrimoine restant à la fin du plan", () => {
+    const fin = (s: Scenario) => summarize("", { kind: "reer-first" }, runProjection(s, tax), s.assumptions).afterTaxEstate;
+    expect(fin(scen([voiture]))).toBeLessThan(fin(scen([])));
+    expect(fin(scen([{ ...voiture, amount: 80000 }]))).toBeLessThan(fin(scen([voiture])));          // plus la dépense est élevée, moins il reste
+  });
+  it("une dépense plus tardive coûte plus cher en dollars courants, mais autant en dollars de départ", () => {
+    const a = at(runProjection(scen([{ label: "x", year: 2028, amount: 10000 }]), tax), 2028).extraSpending;
+    const b = at(runProjection(scen([{ label: "x", year: 2040, amount: 10000 }]), tax), 2040).extraSpending;
+    expect(b / a).toBeCloseTo(Math.pow(1.02, 12), 8);
+  });
+  it("les stratégies, les durées de vie et l'optimisation de la RRQ et de la PSV tiennent compte des dépenses", () => {
+    const s = scen([voiture]);
+    expect(compareStrategies(s, tax, defaultCandidates().slice(0, 3)).length).toBe(3);
+    expect(applyDeathScenario(s, { label: "x", deathAges: [70, undefined] }).extraExpenses?.length).toBe(1);
+    const res = optimizeBenefits(s, tax, {}, { rrq: [false, true], psv: [false, false] });           // la RRQ de B (64 ans) : 9 âges possibles
+    expect(res.total).toBe(9);
+    expect(res.best.afterTaxEstate).toBeGreaterThanOrEqual(res.current.afterTaxEstate);
+  });
+  it("le scénario d'origine n'est pas modifié par le calcul", () => {
+    const s = scen([voiture]);
+    const before = JSON.stringify(s);
+    runProjection(s, tax);
+    expect(JSON.stringify(s)).toBe(before);
+  });
+});

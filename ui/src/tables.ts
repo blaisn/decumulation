@@ -14,6 +14,7 @@ type Sp = YearResult["spouses"][0];
 export function yearTable(s: Scenario, rows: YearResult[], real: boolean, expanded: ReadonlySet<number> = new Set()): string {
   const d = deflate(s, real);
   const sum = (y: YearResult, pick: (p: Sp) => number) => (y.spouses[0] ? pick(y.spouses[0]) + pick(y.spouses[1]) : 0);
+  const extras = rows.some((y) => y.extraSpending > 0);      // colonne ajoutée seulement s'il y a une dépense supplémentaire dans le plan
   const sales = rows.some((y) => y.spouses[0].propertyProceeds + y.spouses[1].propertyProceeds > 0);      // colonnes ajoutées seulement si un immeuble est vendu
 
   // Une seule définition des colonnes sert à la ligne du ménage et à celle de chaque conjoint.
@@ -33,7 +34,7 @@ export function yearTable(s: Scenario, rows: YearResult[], real: boolean, expand
     { label: "Taux marginal", total: () => "", spouse: (_y, p) => fmtPct(p.marginalRate) },
     col("Impôt", (p) => p.tax),
     // Conjoint : sa part de la dépense visée et du manque (réparti selon cette part).
-    col("Dépenses visées", (p) => p.spending), col("Manque", (p) => p.shortfall),
+    col("Dépenses visées", (p) => p.spending), ...(extras ? [col("Dépenses supp.", (p) => p.extraSpending)] : []), col("Manque", (p) => p.shortfall),
     col("Solde REER/FERR", (p) => p.reerBalanceEnd), col("Solde CELI", (p) => p.celiBalanceEnd), col("Solde non enr.", (p) => p.nonRegBalanceEnd),
   ];
   const cell = (c: string | number) => `<td>${typeof c === "number" ? fmtNum(c) : esc(c)}</td>`;

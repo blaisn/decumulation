@@ -15,8 +15,8 @@ import { compareLongevity } from "../src/index";
 import { summarize } from "../src/index";
 import { ALL_FREE, benefitRanges, choiceKey, currentChoice, enumerateChoices, evaluateChoices, rankResults } from "../src/index";
 import type { BenefitChoice, ChoiceResult, OptimizationResult, Scenario } from "../src/index";
-import { RRQ_MAX_AT_65, applyBenefitChoice, benefitHint, newProperty, principalResidenceCount, propertyHint, CAPITAL_GAINS_INCLUSION } from "../ui/src/model";
-import type { FormState, PropertyForm } from "../ui/src/model";
+import { RRQ_MAX_AT_65, applyBenefitChoice, benefitHint, extraExpenseHint, newExtraExpense, newProperty, principalResidenceCount, propertyHint, CAPITAL_GAINS_INCLUSION } from "../ui/src/model";
+import type { ExtraExpenseForm, FormState, PropertyForm } from "../ui/src/model";
 import { fmtMoney } from "../ui/src/format";
 import { choiceText, durationText, estimateSeconds, optionRows, plannedCount, progressText, resultsTable, verdictHtml } from "../ui/src/optimize-view";
 import { OptimizationCancelled, chunkChoices, runChoices, workerCount } from "../ui/src/optimize-run";
@@ -135,8 +135,8 @@ describe("export et affichage", () => {
     expect(csv.trim().split("\r\n").length).toBe(1 + rows.length * 2);
     expect(has(csv, '"<b>""Alex""</b>"')).toBe(true); // guillemets échappés
     const t = parseCsv(csv);
-    expect(t.headers.length).toBe(27);
-    expect(new Set(t.rows.map((r) => r.length))).toEqual(new Set([27]));
+    expect(t.headers.length).toBe(28);
+    expect(new Set(t.rows.map((r) => r.length))).toEqual(new Set([28]));
     expect(t.col(t.rows[0], "Indice d'inflation (départ = 1)")).toBe("1,0000");                   // indice d'inflation de l'année de départ
     expect(t.col(t.rows[0], "Taux marginal (%)")).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
     expect(t.col(t.rows[2], "Indice d'inflation (départ = 1)")).toBe("1,0200");
@@ -1348,6 +1348,8 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
     return { scenario, rows: runProjection(scenario, tax) };
   };
   const withSale = (spending = "100000") => sc(spending, (f) => { f.properties = [{ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000" }]; });
+  /** Toutes les colonnes possibles du tableau : une vente d'immeuble et une dépense supplémentaire. */
+  const withAll = () => sc("100000", (f) => { f.properties = [{ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000" }]; f.extraExpenses = [{ label: "Voiture", year: "2029", amount: "40000" }]; });
   // Correspondance entre les colonnes du tableau et celles du CSV (le CSV garde des libellés complets).
   const CSV_NAME: Record<string, string> = {
     "Année": "Année", "Âges": "Âge", "Rentes de régimes": "Rente de régime de retraite", "RRQ": "RRQ", "PSV": "PSV",
@@ -1355,7 +1357,7 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
     "Vente d'immeubles": "Vente d'immeubles", "Gain en capital imposable": "Gain en capital imposable",
     "Cotisation CELI": "Cotisation CELI", "Cotisation non enr.": "Cotisation non enregistré", "PSV récupérée": "Récupération de la PSV",
     "Pension fractionnée": "Fractionnement (reçu + / cédé −)", "Revenu imposable": "Revenu imposable", "Taux marginal": "Taux marginal (%)", "Impôt": "Impôt",
-    "Dépenses visées": "Dépenses visées", "Manque": "Manque", "Solde REER/FERR": "Solde REER/FERR", "Solde CELI": "Solde CELI", "Solde non enr.": "Solde non enregistré",
+    "Dépenses visées": "Dépenses visées", "Dépenses supp.": "Dépenses supp.", "Manque": "Manque", "Solde REER/FERR": "Solde REER/FERR", "Solde CELI": "Solde CELI", "Solde non enr.": "Solde non enregistré",
   };
 
   it("tableau : l'ordre des colonnes, sans vente d'immeubles", () => {
@@ -1372,17 +1374,17 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
     expect(h.slice(5, 12)).toEqual(["Retraits REER/FERR", "Retraits CELI", "Retraits non enr.", "Vente d'immeubles", "Gain en capital imposable", "Cotisation CELI", "Cotisation non enr."]);
     expect(h.indexOf("Impôt")).toBe(h.indexOf("Taux marginal") + 1);          // l'impôt suit le taux marginal
   });
-  it("CSV : l'ordre exact des 27 colonnes", () => {
+  it("CSV : l'ordre exact des 28 colonnes", () => {
     const { scenario, rows } = sc("100000");
     expect(parseCsv(planToCsv(scenario, rows)).headers).toEqual([
       "Année", "Conjoint", "Âge", "En vie", "Rente de régime de retraite", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI", "Retraits non enregistré",
       "Rendement imposable non enregistré", "Vente d'immeubles", "Gain en capital imposable", "Cotisation CELI", "Cotisation non enregistré", "Récupération de la PSV",
-      "Fractionnement (reçu + / cédé −)", "Revenu imposable", "Taux marginal (%)", "Impôt", "Dépenses visées", "Part des dépenses (%)", "Manque",
+      "Fractionnement (reçu + / cédé −)", "Revenu imposable", "Taux marginal (%)", "Impôt", "Dépenses visées", "Dépenses supp.", "Part des dépenses (%)", "Manque",
       "Solde REER/FERR", "Solde CELI", "Solde non enregistré", "Indice d'inflation (départ = 1)",
     ]);
   });
   it("le CSV contient toutes les colonnes du tableau, dans le même ordre", () => {
-    const { scenario, rows } = withSale();                      // avec une vente : le tableau a alors toutes ses colonnes possibles
+    const { scenario, rows } = withAll();                      // avec une vente : le tableau a alors toutes ses colonnes possibles
     const ui = parseYearTable(yearTable(scenario, rows, false)).headers;
     const csv = parseCsv(planToCsv(scenario, rows)).headers;
     const positions = ui.map((h) => { expect(CSV_NAME[h]).toBeDefined(); return csv.indexOf(CSV_NAME[h]); });
@@ -1394,12 +1396,13 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
     expect(h.indexOf("Conjoint")).toBe(h.indexOf("Année") + 1);
     expect(h.indexOf("En vie")).toBe(h.indexOf("Âge") + 1);
     expect(h.indexOf("Rendement imposable non enregistré")).toBe(h.indexOf("Retraits non enregistré") + 1);
-    expect(h.indexOf("Part des dépenses (%)")).toBe(h.indexOf("Dépenses visées") + 1);
+    expect(h.indexOf("Dépenses supp.")).toBe(h.indexOf("Dépenses visées") + 1);              // demandé : juste après « Dépenses visées »
+    expect(h.indexOf("Part des dépenses (%)")).toBe(h.indexOf("Dépenses supp.") + 1);
     expect(h.indexOf("Manque")).toBe(h.indexOf("Part des dépenses (%)") + 1);
     expect(h[h.length - 1]).toBe("Indice d'inflation (départ = 1)");
   });
   it("chaque ligne de conjoint du tableau a les mêmes valeurs que sa ligne du CSV, pour toutes les colonnes", () => {
-    for (const { scenario, rows } of [withSale(), sc("100000"), sc("170000")]) {
+    for (const { scenario, rows } of [withAll(), withSale(), sc("100000"), sc("170000")]) {
       const t = parseYearTable(yearTable(scenario, rows, false));
       const csv = parseCsv(planToCsv(scenario, rows));
       let compared = 0;
@@ -1505,5 +1508,201 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
     expect(y).toBeDefined();
     expect(y.spouses[0].shortfall).toBe(0);
     expect(y.spouses[1].shortfall).toBeCloseTo(y.shortfall, 6);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("dépenses supplémentaires : formulaire et scénario", () => {
+  const voiture = (o: Partial<ExtraExpenseForm> = {}): ExtraExpenseForm => ({ label: "Voiture", year: "2030", amount: "40000", ...o });
+  const withExtras = (...es: ExtraExpenseForm[]): FormState => { const f = defaultForm(); f.extraExpenses = es; return f; };
+  const errorsOf = (f: FormState) => toScenario(f).errors;
+  const plain = (t: string) => t.replace(/[\u00a0\u202f]/g, " ").replace(/&#39;/g, "'");
+
+  it("par défaut : aucune dépense supplémentaire, et le scénario n'a pas de champ « extraExpenses »", () => {
+    const f = defaultForm();
+    expect(f.extraExpenses).toEqual([]);
+    expect("extraExpenses" in toScenario(f).scenario!).toBe(false);
+  });
+  it("une nouvelle dépense : cinq ans après le début du plan, montant nul, valide et sans effet sur le plan", () => {
+    expect(newExtraExpense("2026")).toEqual({ label: "", year: "2031", amount: "0" });
+    expect(newExtraExpense("abc").year).toBe("2031");
+    const r = toScenario(withExtras(newExtraExpense()));
+    expect(r.errors).toEqual([]);
+    expect(r.scenario!.extraExpenses).toEqual([{ label: "Dépense 1", year: 2031, amount: 0 }]);
+    expect(JSON.stringify(runProjection(r.scenario!, tax))).toBe(JSON.stringify(runProjection(toScenario(defaultForm()).scenario!, tax)));
+  });
+  it("convertit la saisie : nombres avec espaces et virgule, nom nettoyé, nom par défaut", () => {
+    const p = toScenario(withExtras(voiture({ amount: "40 000,50", label: "  Voiture  " }), voiture({ label: "" }))).scenario!.extraExpenses!;
+    expect(p[0]).toEqual({ label: "Voiture", year: 2030, amount: 40000.5 });
+    expect(p[1].label).toBe("Dépense 2");
+  });
+  it("l'année doit être à partir du début du plan", () => {
+    const e = errorsOf(withExtras(voiture({ year: "2025" })));
+    expect(e).toEqual(["Dépense supplémentaire 1 (Voiture) : année 2025 : elle doit être à partir du début du plan (2026)."]);
+    expect(errorsOf(withExtras(voiture({ year: "2026" })))).toEqual([]);
+  });
+  it("refuse un montant ou une année invalide, en nommant la dépense", () => {
+    expect(errorsOf(withExtras(voiture({ amount: "" })))).toEqual(["Dépense supplémentaire 1 (Voiture) : montant : entrez une valeur."]);
+    expect(errorsOf(withExtras(voiture({ amount: "abc" }))).some((x) => x.includes("montant") && x.includes("n'est pas un nombre"))).toBe(true);
+    expect(errorsOf(withExtras(voiture({ amount: "-5" }))).some((x) => x.includes("montant"))).toBe(true);
+    expect(errorsOf(withExtras(voiture({ year: "2030,5" }))).some((x) => x.includes("année : entrez un nombre entier"))).toBe(true);
+    expect(errorsOf(withExtras(voiture({ year: "" }))).some((x) => x.includes("année"))).toBe(true);
+    expect(errorsOf(withExtras(voiture(), voiture({ label: "", amount: "" })))).toEqual(["Dépense supplémentaire 2 : montant : entrez une valeur."]);
+  });
+
+  // ---- aperçu
+  it("aperçu : le montant en dollars courants de l'année, après impôt", () => {
+    const t = plain(extraExpenseHint(withExtras(voiture()), 0));
+    expect(t).toBe(`Soit ${plain(fmtMoney(40000 * Math.pow(1.02, 4)))} en dollars courants de 2030, après impôt.`);
+  });
+  it("aperçu : montant nul sans effet; avertissement après la fin du plan; vide si invalide", () => {
+    expect(extraExpenseHint(withExtras(voiture({ amount: "0" })), 0)).toContain("n'a aucun effet");
+    expect(plain(extraExpenseHint(withExtras(voiture({ year: "2060" })), 0))).toContain("après la fin du plan (2057)");
+    expect(plain(extraExpenseHint(withExtras(voiture({ year: "2057" })), 0))).not.toContain("après la fin du plan");
+    for (const bad of [{ amount: "" }, { amount: "abc" }, { amount: "-3" }, { year: "" }, { year: "2020" }, { year: "2030,5" }]) expect(extraExpenseHint(withExtras(voiture(bad)), 0)).toBe("");
+    expect(extraExpenseHint(withExtras(), 4)).toBe("");
+  });
+
+  // ---- formulaire
+  it("la section : message vide, bouton d'ajout, puis un bloc par dépense avec le compte dans le titre", () => {
+    const empty = renderForm(defaultForm(), new Set(["extras"]));
+    expect(empty).toContain("<summary>Dépenses supplémentaires</summary>");
+    expect(empty).toContain("Aucune dépense supplémentaire");
+    expect(empty).toContain('data-action="add-extra"');
+    expect(plain(empty)).toContain("le revenu requis de cette année-là est la somme des deux");
+    const html = renderForm(withExtras(voiture(), voiture({ label: "Toit" })), new Set(["extras"]));
+    expect(html).toContain("<summary>Dépenses supplémentaires (2)</summary>");
+    expect((html.match(/class="extra"/g) ?? []).length).toBe(2);
+    expect((html.match(/data-action="remove-extra"/g) ?? []).length).toBe(2);
+    for (const k of ["label", "year", "amount"]) expect(html).toContain(`data-path="extraExpenses.1.${k}"`);
+    expect(plain(html)).toContain("Après impôt, en dollars de 2026");
+    expect(/data-extra-hint="0"[^>]*>Soit /.test(plain(html))).toBe(true);
+  });
+  it("la section est placée après les immeubles et avant la stratégie, et les valeurs sont échappées", () => {
+    const html = renderForm(withExtras(voiture({ label: "<img src=x onerror=1>" })), new Set(["extras"]));
+    expect(html.indexOf('data-sec="properties"')).toBeLessThan(html.indexOf('data-sec="extras"'));
+    expect(html.indexOf('data-sec="extras"')).toBeLessThan(html.indexOf('data-sec="strategy"'));
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img src=x");
+  });
+
+  // ---- changements, fichiers
+  it("le suivi des changements : ajout, retrait et champs, avec le numéro de la dépense", () => {
+    const a = defaultForm(), b = JSON.parse(JSON.stringify(a)) as FormState;
+    b.extraExpenses = [voiture()];
+    expect(describeChanges(a, b)).toEqual(["Dépense supplémentaire 1 ajoutée"]);
+    expect(describeChanges(b, a)).toEqual(["Dépense supplémentaire 1 retirée"]);
+    const c = JSON.parse(JSON.stringify(b)) as FormState;
+    c.extraExpenses[0].amount = "45000"; c.extraExpenses[0].year = "2031"; c.extraExpenses[0].label = "Auto";
+    expect(describeChanges(b, c)).toEqual(["Dépense supplémentaire 1 (nom) : Voiture → Auto", "Dépense supplémentaire 1 (année) : 2030 → 2031", "Dépense supplémentaire 1 (montant) : 40000 → 45000"]);
+    expect([...changedPaths(b, c)].sort()).toEqual(["extraExpenses.0.amount", "extraExpenses.0.label", "extraExpenses.0.year"]);
+  });
+  it("l'aller-retour par fichier conserve les dépenses; un ancien fichier s'ouvre sans dépense; les champs manquants reprennent leur défaut", () => {
+    const f = withExtras(voiture(), voiture({ label: "Toit", year: "2033", amount: "25000" }));
+    expect(fileFromJson(fileToJson(f, null)).form.extraExpenses).toEqual(f.extraExpenses);
+    const old = JSON.parse(JSON.stringify(defaultForm())); delete old.extraExpenses;
+    expect(formFromJson(JSON.stringify({ form: old })).extraExpenses).toEqual([]);
+    const partial = JSON.parse(JSON.stringify(defaultForm())); partial.extraExpenses = [{ label: "X", amount: 5 }];
+    const e = formFromJson(JSON.stringify({ form: partial })).extraExpenses[0];
+    expect(e).toEqual({ label: "X", year: "2031", amount: "5" });
+  });
+});
+
+describe("dépenses supplémentaires : résultats", () => {
+  const fx = (year: string, amount: string, label = "Voiture"): ExtraExpenseForm => ({ label, year, amount });
+  const sc = (extras: ExtraExpenseForm[], mutate?: (f: FormState) => void) => {
+    const f = defaultForm(); f.extraExpenses = extras; mutate?.(f);
+    const scenario = toScenario(f).scenario!;
+    return { scenario, rows: runProjection(scenario, tax) };
+  };
+  const plain = (t: string) => t.replace(/[\u00a0\u202f]/g, " ").replace(/&#39;/g, "'");
+
+  it("CSV : « Dépenses supp. » juste après « Dépenses visées », avec la part de chaque conjoint", () => {
+    const { scenario, rows } = sc([fx("2030", "40000")], (f) => { f.spouses[0].expenseShare = "70"; });
+    const t = parseCsv(planToCsv(scenario, rows));
+    expect(t.headers.indexOf("Dépenses supp.")).toBe(t.headers.indexOf("Dépenses visées") + 1);
+    const [a, b] = t.rows.filter((l) => t.col(l, "Année") === "2030");
+    const nominal = 40000 * Math.pow(1.02, 4);
+    expect(t.col(a, "Dépenses supp.")).toBe(String(Math.round(0.7 * nominal)));
+    expect(t.col(b, "Dépenses supp.")).toBe(String(Math.round(0.3 * nominal)));
+    expect(Math.abs(Number(t.col(a, "Dépenses supp.")) + Number(t.col(b, "Dépenses supp.")) - Math.round(nominal))).toBeLessThanOrEqual(1);
+    const autre = t.rows.filter((l) => t.col(l, "Année") === "2031");
+    expect(autre.every((l) => t.col(l, "Dépenses supp.") === "0")).toBe(true);
+  });
+  it("CSV : la colonne existe toujours, à zéro sans dépense supplémentaire", () => {
+    const { scenario, rows } = sc([]);
+    const t = parseCsv(planToCsv(scenario, rows));
+    expect(t.headers).toContain("Dépenses supp.");
+    expect(t.rows.every((l) => t.col(l, "Dépenses supp.") === "0")).toBe(true);
+  });
+  it("tableau : sans dépense supplémentaire, aucune colonne ajoutée", () => {
+    const { scenario, rows } = sc([]);
+    const h = parseYearTable(yearTable(scenario, rows, false)).headers;
+    expect(h).not.toContain("Dépenses supp.");
+    expect(h.length).toBe(20);
+  });
+  it("tableau : avec une dépense, la colonne s'insère entre « Dépenses visées » et « Manque »", () => {
+    const { scenario, rows } = sc([fx("2030", "40000")]);
+    const t = parseYearTable(yearTable(scenario, rows, false));
+    expect(t.headers.length).toBe(21);
+    expect(t.headers.slice(t.headers.indexOf("Dépenses visées"), t.headers.indexOf("Dépenses visées") + 3)).toEqual(["Dépenses visées", "Dépenses supp.", "Manque"]);
+    const i = t.headers.indexOf("Dépenses supp.") - 2;
+    const [parent, a, b] = t.rows.filter((r) => r.year === 2030);
+    const nominal = Math.round(40000 * Math.pow(1.02, 4));
+    expect(digitsOf(parent.cells[i])).toBe(nominal);
+    expect(Math.abs(digitsOf(a.cells[i]) + digitsOf(b.cells[i]) - nominal)).toBeLessThanOrEqual(1);
+    expect(digitsOf(t.rows.find((r) => !r.sub && r.year === 2031)!.cells[i])).toBe(0);
+  });
+  it("tableau : en dollars constants, la dépense apparaît à son montant saisi (en dollars de départ)", () => {
+    const { scenario, rows } = sc([fx("2030", "40000")]);
+    const t = parseYearTable(yearTable(scenario, rows, true));
+    const i = t.headers.indexOf("Dépenses supp.") - 2;
+    expect(Math.abs(digitsOf(t.rows.find((r) => !r.sub && r.year === 2030)!.cells[i]) - 40000)).toBeLessThanOrEqual(1);
+  });
+  it("tableau et CSV : les lignes de conjoint concordent avec la dépense supplémentaire, et le décès n'en réduit pas le montant", () => {
+    const { scenario, rows } = sc([fx("2040", "30000")], (f) => { f.spouses[0].deathAge = "75"; });
+    const t = parseYearTable(yearTable(scenario, rows, false)), csv = parseCsv(planToCsv(scenario, rows));
+    const i = t.headers.indexOf("Dépenses supp.") - 2;
+    const nominal = Math.round(30000 * Math.pow(1.02, 14));
+    const [parent, dead, live] = t.rows.filter((r) => r.year === 2040);
+    expect(dead.cells[i]).toBe("—");
+    expect(digitsOf(live.cells[i])).toBe(nominal);
+    expect(digitsOf(parent.cells[i])).toBe(nominal);
+    const lines = csv.rows.filter((l) => csv.col(l, "Année") === "2040");
+    expect(csv.col(lines[0], "Dépenses supp.")).toBe("0");
+    expect(csv.col(lines[1], "Dépenses supp.")).toBe(String(nominal));
+  });
+  it("tableau avec ventes d'immeubles et dépenses : toutes les colonnes possibles, dans l'ordre", () => {
+    const { scenario, rows } = sc([fx("2030", "40000")], (f) => { f.properties = [{ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000" }]; });
+    const h = parseYearTable(yearTable(scenario, rows, false)).headers;
+    expect(h.length).toBe(23);
+    expect(h.slice(h.indexOf("Impôt"))).toEqual(["Impôt", "Dépenses visées", "Dépenses supp.", "Manque", "Solde REER/FERR", "Solde CELI", "Solde non enr."]);
+  });
+  it("graphique : la ligne des dépenses inclut les dépenses supplémentaires, et l'argent est conservé", () => {
+    const { scenario, rows } = sc([fx("2030", "40000"), fx("2036", "25000", "Toit")]);
+    const withoutExtra = sourcesData(sc([]).scenario, sc([]).rows, false);
+    const d = sourcesData(scenario, rows, false);
+    const k = rows.findIndex((y) => y.year === 2030);
+    expect(d.outflow[k] - withoutExtra.outflow[k]).toBeGreaterThan(40000);                         // la dépense (indexée) et l'impôt qu'elle fait payer
+    rows.forEach((_, j) => expect(Math.abs(d.stacks[j] + d.shortfall[j] - d.outflow[j] - d.contributions[j])).toBeLessThan(1e-6));
+    for (const real of [false, true]) {
+      const dd = sourcesData(scenario, rows, real);
+      rows.forEach((_, j) => expect(Math.abs(dd.stacks[j] + dd.shortfall[j] - dd.outflow[j] - dd.contributions[j])).toBeLessThan(1e-6));
+    }
+  });
+  it("graphique : le texte accessible et l'info-bulle parlent des dépenses, et un manque dû à une dépense est signalé", () => {
+    const { scenario, rows } = sc([fx("2030", "900000")]);
+    const svg = plain(sourcesChart(scenario, rows, false));
+    expect(svg).toContain("comparés aux dépenses (visées et supplémentaires) et à l'impôt");
+    expect(svg).toContain("dépenses + impôt");
+    expect(svg).toContain("MANQUE");
+    expect(svg).toContain("les dépenses visées ne sont pas toutes financées à partir de 2030");
+  });
+  it("un plan qui finance tout sans dépense peut manquer avec une dépense trop élevée, et le manque est celui du ménage", () => {
+    const { rows } = sc([fx("2030", "900000")]);
+    const y = rows.find((r) => r.year === 2030)!;
+    expect(y.shortfall).toBeGreaterThan(100000);
+    expect(y.netIncome).toBeCloseTo(y.targetSpending + y.extraSpending - y.shortfall, 6);
+    expect(sc([]).rows.every((r) => r.shortfall < 1)).toBe(true);
   });
 });

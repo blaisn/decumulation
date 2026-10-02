@@ -32,6 +32,7 @@ const COLUMNS: { header: string; value: (r: Row) => string | number }[] = [
   { header: "Taux marginal (%)", value: (r) => (r.sp.marginalRate * 100).toFixed(2).replace(".", ",") },
   { header: "Impôt", value: (r) => r.sp.tax },
   { header: "Dépenses visées", value: (r) => r.sp.spending },
+  { header: "Dépenses supp.", value: (r) => r.sp.extraSpending },
   { header: "Part des dépenses (%)", value: (r) => (r.sp.spendingShare * 100).toFixed(2).replace(".", ",") },
   { header: "Manque", value: (r) => r.sp.shortfall },
   { header: "Solde REER/FERR", value: (r) => r.sp.reerBalanceEnd },

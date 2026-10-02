@@ -44,6 +44,17 @@ export interface DbPension {
 }
 
 /**
+ * Dépense supplémentaire ponctuelle (voiture, rénovation, voyage...), en plus de la dépense annuelle visée.
+ * Le montant est net (après impôt) et en dollars de `startYear` : il est indexé à l'inflation jusqu'à son année, comme la dépense visée.
+ * Contrairement à la dépense visée, il n'est pas réduit après un décès (c'est un montant explicite).
+ */
+export interface ExtraExpense {
+  label: string;
+  year: number; // à partir de `startYear`
+  amount: number;
+}
+
+/**
  * Immeuble (résidence, chalet, immeuble à revenus...) acheté avant le début du plan, sans hypothèque, et vendu au plus une fois.
  * À la vente, le produit est versé dans l'année (il finance les dépenses, puis le surplus est placé au CELI et au compte non
  * enregistré) et le gain en capital s'ajoute au revenu imposable des propriétaires, sauf pour une résidence principale.
@@ -125,6 +136,7 @@ export interface Scenario {
    */
   firstSpouseSpendingShare?: number;
   properties?: Property[]; // immeubles : aucun par défaut
+  extraExpenses?: ExtraExpense[]; // dépenses supplémentaires ponctuelles : aucune par défaut
   assumptions: Assumptions;
   strategy?: Strategy; // défaut : reer-first
 }
@@ -152,6 +164,7 @@ export interface SpouseYear {
   propertyProceeds: number; // part de ce conjoint dans le produit de la vente d'immeubles de l'année, en dollars courants (argent non imposable)
   taxableCapitalGain: number; // gain en capital imposable ajouté à son revenu (après le taux d'inclusion); 0 pour une résidence principale
   shortfall: number; // part de ce conjoint dans le manque du ménage, selon sa part des dépenses (la somme des deux est le manque du ménage)
+  extraSpending: number; // part de ce conjoint dans les dépenses supplémentaires de l'année, en dollars courants (selon sa part des dépenses)
   spending: number; // part de ce conjoint dans la dépense visée du ménage, en dollars courants (0 si décédé)
   spendingShare: number; // cette part en fraction de la dépense du ménage (1 pour le survivant, 0 si décédé)
   marginalRate: number; // taux marginal combiné (fédéral après abattement du Québec + Québec) du palier du revenu imposable; 0 si décédé
@@ -160,7 +173,8 @@ export interface SpouseYear {
 export interface YearResult {
   year: number;
   spouses: [SpouseYear, SpouseYear];
-  targetSpending: number;
+  targetSpending: number; // dépense visée (sans les dépenses supplémentaires)
+  extraSpending: number; // dépenses supplémentaires de l'année; le revenu requis est la somme des deux
   netIncome: number;
   shortfall: number; // > 0 = objectif non atteint
 }
