@@ -126,18 +126,81 @@ export function householdTax(p: [Taxpayer, Taxpayer | null], t: TaxYearTable, tr
   };
 }
 
-/** Choisit le fractionnement (0 à 50 % de la pension admissible, dans un sens ou l'autre) qui minimise l'impôt total + la récupération de la PSV. */
-export function optimizeSplit(p: [Taxpayer, Taxpayer], t: TaxYearTable): HouseholdTaxResult {
+/**
+ * Fractionnement du revenu de pension (règles fédérale et québécoise) :
+ * - le conjoint qui cède peut transférer au plus 50 % de sa pension admissible de l'année (`eligiblePension` : rentes de régime
+ *   de pension agréé à tout âge; retraits de REER/FERR seulement à partir de 65 ans; jamais la RRQ ni la PSV);
+ * - l'âge de celui qui reçoit n'a pas d'importance.
+ * L'admissibilité (âge, nature du revenu) est établie par l'appelant, qui fournit `eligiblePension`; ici on applique le plafond.
+ */
+export const MAX_SPLIT_SHARE = 0.5;
+export const splitCap = (p: Taxpayer) => Math.max(0, p.eligiblePension) * MAX_SPLIT_SHARE;
+
+const GRID_PCT = 2;      // pas de la grille, en % de la pension admissible
+
+/**
+ * Écart d'impôt (en $ par année) qu'on accepte pour que celui qui reçoit ne change pas de palier : voir `optimizeSplit`.
+ * Négligeable (de l'ordre du dollar par année) devant les montants du plan.
+ */
+export const SPLIT_TOLERANCE = 5;
+
+/**
+ * Choisit le fractionnement qui minimise l'impôt total + la récupération de la PSV, dans un sens ou l'autre, jusqu'au plafond de 50 %.
+ *
+ * 1. Grille de 2 % de la pension admissible, puis raffinement autour du meilleur point (pas décroissants jusqu'à 0,50 $) :
+ *    la fonction d'impôt est linéaire par morceaux, son minimum se trouve à un changement de palier ou de crédit, et une grille
+ *    seule le dépassait de jusqu'à un pas (le raffinement le place au dollar près, avec moins d'évaluations qu'une grille de 1 %).
+ * 2. Égalité des taux marginaux : si, au minimum, celui qui reçoit se retrouve à un taux marginal (statutaire) supérieur à celui
+ *    de celui qui cède, on réduit le fractionnement au montant qui les égalise, pourvu que l'impôt n'augmente pas de plus de
+ *    `tolerance`. Au-delà, le transfert qui change de palier reste le meilleur (par exemple à cause de la disparition progressive
+ *    du montant en raison de l'âge ou de la récupération de la PSV, qui font différer les taux effectifs des taux statutaires).
+ */
+export function optimizeSplit(p: [Taxpayer, Taxpayer], t: TaxYearTable, tolerance = SPLIT_TOLERANCE): HouseholdTaxResult {
   const cost = (r: HouseholdTaxResult) => r.tax[0] + r.tax[1] + r.clawback[0] + r.clawback[1];
   let best = householdTax(p, t);
-  let bestTotal = cost(best);
+  let bestCost = cost(best), bestFrom: 0 | 1 = 0, bestAmount = 0;
+
+  // 1) grille de 2 % de la pension admissible
   for (const from of [0, 1] as const) {
-    for (let pct = 1; pct <= 50; pct++) {
-      const amount = (Math.max(0, p[from].eligiblePension) * pct) / 100;
-      if (amount <= 0) break;
+    const cap = splitCap(p[from]);
+    if (cap <= 0) continue;
+    for (let pct = GRID_PCT; pct <= 50; pct += GRID_PCT) {
+      const amount = (cap * pct) / 50;                      // pct % de la pension admissible (le plafond en est 50 %)
       const r = householdTax(p, t, { from, amount });
-      const total = cost(r);
-      if (total < bestTotal - 0.005) { best = r; bestTotal = total; }
+      const c = cost(r);
+      if (c < bestCost - 0.005) { best = r; bestCost = c; bestFrom = from; bestAmount = amount; }
+    }
+  }
+  if (bestAmount <= 0) return best;
+
+  // raffinement local : pas décroissants autour du meilleur montant
+  const cap = splitCap(p[bestFrom]);
+  let step = (cap * GRID_PCT) / 50;
+  while (step > 0.5) {
+    let improved = false;
+    for (const amount of [bestAmount - step, bestAmount + step]) {
+      if (amount <= 0 || amount > cap + 1e-9) continue;
+      const r = householdTax(p, t, { from: bestFrom, amount });
+      const c = cost(r);
+      if (c < bestCost - 1e-9) { best = r; bestCost = c; bestAmount = amount; improved = true; }
+    }
+    if (!improved) step /= 2;
+  }
+
+  // 2) égalité des taux marginaux
+  const to = (1 - bestFrom) as 0 | 1;
+  const crosses = (r: HouseholdTaxResult) => r.marginal[to] > r.marginal[bestFrom] + 1e-9;
+  if (crosses(best) && !crosses(householdTax(p, t))) {
+    // Les taux de celui qui reçoit ne baissent jamais et ceux de celui qui cède ne montent jamais quand le montant diminue :
+    // le plus grand montant qui ne les inverse pas se trouve par bissection.
+    let lo = 0, hi = bestAmount;
+    for (let k = 0; k < 40 && hi - lo > 0.01; k++) {
+      const mid = (lo + hi) / 2;
+      if (crosses(householdTax(p, t, { from: bestFrom, amount: mid }))) hi = mid; else lo = mid;
+    }
+    if (lo > 0) {
+      const r = householdTax(p, t, { from: bestFrom, amount: lo });
+      if (cost(r) <= bestCost + tolerance) best = r;
     }
   }
   return best;

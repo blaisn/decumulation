@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import table2026 from "../src/engine/data/tax-2026.json";
-import { progressiveTax, householdTax, optimizeSplit, indexTable, marginalRate } from "../src/engine/tax";
+import { progressiveTax, householdTax, optimizeSplit, indexTable, marginalRate, splitCap, MAX_SPLIT_SHARE, SPLIT_TOLERANCE } from "../src/engine/tax";
 import { runProjection, dbAmount } from "../src/engine/projection";
 import { compareStrategies, defaultCandidates, compareDeathOrders, deathScenarios, applyDeathScenario, summarize, compareLongevity, longevityScenarios } from "../src/engine/compare";
 import { gompertz, representativeDeathAges } from "../src/engine/mortality";
@@ -1161,5 +1161,189 @@ describe("manque par conjoint", () => {
   it("la répartition ne change pas le manque du ménage", () => {
     const a = runProjection(mk(0.5), tax), b = runProjection(mk(0.9), tax);
     expect(a.map((y) => y.shortfall)).toEqual(b.map((y) => y.shortfall));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("fractionnement du revenu de pension : plafond, admissibilité et choix du montant", () => {
+  type Tp = { age: number; income: number; eligiblePension: number; psv?: number };
+  const cost = (r: ReturnType<typeof householdTax>) => r.tax[0] + r.tax[1] + r.clawback[0] + r.clawback[1];
+  const t26 = tax, t27 = indexTable(tax, 1.02);
+  /** Plus petit impôt possible, par recherche exhaustive au pas de 25 $, dans les deux sens, jusqu'au plafond de 50 %. */
+  const exhaustive = (p: [Tp, Tp], t: TaxYearTable, accept: (r: ReturnType<typeof householdTax>) => boolean = () => true) => {
+    let best = accept(householdTax(p, t)) ? cost(householdTax(p, t)) : Infinity;
+    for (const from of [0, 1] as const) for (let a = 25; a <= splitCap(p[from]); a += 25) {
+      const r = householdTax(p, t, { from, amount: a });
+      if (accept(r)) best = Math.min(best, cost(r));
+    }
+    return best;
+  };
+  /** Ménages tirés au hasard, de façon reproductible : deux conjoints de 60 à 74 ans, revenus de 20 000 $ à 130 000 $. */
+  const households = (n: number, seed = 12345) => {
+    let s = seed; const rnd = () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296; const pick = (a: number, b: number) => a + rnd() * (b - a);
+    return Array.from({ length: n }, () => {
+      const year = Math.floor(rnd() * 12), f = Math.pow(1.02, year);
+      const mk = (lo: number, hi: number): Tp => { const age = 60 + Math.floor(rnd() * 15), eligiblePension = pick(lo, hi) * f, psv = age >= 65 ? 8700 * f : 0; return { age, eligiblePension, psv, income: eligiblePension + pick(0, 50000) * f + psv }; };
+      return { p: [mk(5000, 70000), mk(0, 50000)] as [Tp, Tp], t: indexTable(tax, f) };
+    });
+  };
+
+  // ---- plafond de 50 %
+  it("le plafond est de 50 % de la pension admissible, et jamais négatif", () => {
+    expect(MAX_SPLIT_SHARE).toBe(0.5);
+    expect(splitCap({ age: 66, income: 0, eligiblePension: 50808 })).toBe(25404);
+    expect(splitCap({ age: 66, income: 0, eligiblePension: 0 })).toBe(0);
+    expect(splitCap({ age: 66, income: 0, eligiblePension: -300 })).toBe(0);
+  });
+  it("on ne transfère jamais plus de 50 % de la pension admissible de celui qui cède, et le revenu total est conservé", () => {
+    for (const { p, t } of households(600)) {
+      const r = optimizeSplit(p, t);
+      const [a, b] = r.splitAmount;
+      expect(a + b).toBeCloseTo(0, 6);                                                    // ce que l'un cède, l'autre le reçoit
+      if (a < 0) expect(-a).toBeLessThanOrEqual(splitCap(p[0]) + 1e-6);
+      if (b < 0) expect(-b).toBeLessThanOrEqual(splitCap(p[1]) + 1e-6);
+      expect(r.incomeAfterSplit[0] + r.incomeAfterSplit[1]).toBeCloseTo(p[0].income + p[1].income, 6);
+    }
+  });
+  it("sans pension admissible chez l'un ni chez l'autre (RRQ et PSV seulement), rien n'est fractionné", () => {
+    const p: [Tp, Tp] = [{ age: 70, income: 27000, eligiblePension: 0, psv: 8700 }, { age: 70, income: 3000, eligiblePension: 0 }];
+    expect(optimizeSplit(p, t26).splitAmount).toEqual([0, 0]);
+    const q: [Tp, Tp] = [{ age: 70, income: 150000, eligiblePension: 0, psv: 8700 }, { age: 60, income: 0, eligiblePension: 0 }];
+    expect(optimizeSplit(q, t26).splitAmount).toEqual([0, 0]);       // même avec un écart de revenu énorme
+  });
+  it("on ne peut céder qu'à partir de la pension admissible de celui qui cède : l'autre, sans pension admissible, ne cède jamais", () => {
+    const p: [Tp, Tp] = [{ age: 66, income: 40000, eligiblePension: 40000 }, { age: 66, income: 90000, eligiblePension: 0 }];
+    const [a, b] = optimizeSplit(p, t26).splitAmount;
+    expect(b).toBeGreaterThanOrEqual(0);                              // le conjoint à 90 000 $ n'a rien à céder
+    expect(a).toBeLessThanOrEqual(0);
+  });
+
+  // ---- qualité du choix
+  it("l'impôt obtenu est à moins de 7 $ du minimum exact (recherche exhaustive), et en moyenne au minimum", () => {
+    let sum = 0, worst = -Infinity;
+    const hs = households(300);
+    for (const { p, t } of hs) { const gap = cost(optimizeSplit(p, t)) - exhaustive(p, t); sum += gap; worst = Math.max(worst, gap); }
+    expect(worst).toBeLessThan(7);
+    expect(sum / hs.length).toBeLessThan(0.5);
+  });
+  it("le fractionnement ne coûte jamais plus cher que de ne rien fractionner", () => {
+    for (const { p, t } of households(300, 777)) expect(cost(optimizeSplit(p, t))).toBeLessThanOrEqual(cost(householdTax(p, t)) + 1e-6);
+  });
+
+  // ---- égalité des taux marginaux
+  it("cas du signalement (2027) : celui qui reçoit s'arrête au seuil du palier, les deux ont le même taux marginal et l'impôt est minimal", () => {
+    const p: [Tp, Tp] = [{ age: 66, income: 97706, eligiblePension: 50808, psv: 8700 }, { age: 64, income: 86073, eligiblePension: 14000 }];
+    const r = optimizeSplit(p, t27);
+    const seuil = t27.quebec.brackets.find((b) => b.rate === 0.19)!.upTo!;           // début du palier à 24 % du Québec (110 854 $ en 2027)
+    expect(r.incomeAfterSplit[1]).toBeLessThanOrEqual(seuil + 0.01);
+    expect(r.incomeAfterSplit[1]).toBeGreaterThan(seuil - 20);                        // il va jusqu'au seuil, pas moins
+    expect(r.marginal[0]).toBeCloseTo(0.3612, 4);
+    expect(r.marginal[1]).toBeCloseTo(0.3612, 4);
+    expect(r.splitAmount[0]).toBeCloseTo(-24781, -1);
+    expect(cost(r)).toBeLessThanOrEqual(exhaustive(p, t27) + 1);
+  });
+  it("sur des milliers de ménages, celui qui reçoit a rarement un taux marginal supérieur à celui qui cède", () => {
+    const hs = households(1000, 4242);
+    let croise = 0;
+    for (const { p, t } of hs) {
+      const r = optimizeSplit(p, t), [a, b] = r.splitAmount;
+      if (a === 0 && b === 0) continue;
+      const to = a > 0 ? 0 : 1;
+      if (r.marginal[to] > r.marginal[1 - to] + 1e-9) croise++;
+    }
+    expect(croise / hs.length).toBeLessThan(0.01);
+  });
+  it("un transfert qui change de palier est gardé quand il fait économiser plus que la tolérance (ici : récupération de la PSV)", () => {
+    // A (66 ans, PSV) à 120 000 $ : il est ramené exactement au seuil de récupération (95 323 $), quitte à faire passer B au palier supérieur.
+    const p: [Tp, Tp] = [{ age: 66, income: 120000, eligiblePension: 70000, psv: 8700 }, { age: 64, income: 85000, eligiblePension: 5000 }];
+    const r = optimizeSplit(p, t26);
+    expect(r.marginal[1]).toBeGreaterThan(r.marginal[0]);                              // B reçoit et se retrouve à un taux supérieur
+    expect(r.incomeAfterSplit[0]).toBeCloseTo(95323, 0);                               // A est ramené au seuil
+    expect(r.clawback[0]).toBe(0);
+    const sansChangement = exhaustive(p, t26, (q) => q.marginal[1] <= q.marginal[0] + 1e-9);
+    expect(sansChangement - cost(r)).toBeGreaterThan(SPLIT_TOLERANCE);                // éviter le changement de palier coûterait bien plus que la tolérance
+    expect(cost(r)).toBeLessThanOrEqual(exhaustive(p, t26) + 1);
+  });
+  it("un petit transfert vers celui qui n'a pas de pension admissible débloque ses crédits pour revenu de pension (2 833 $)", () => {
+    // 3 541 $ (montant du Québec) / 1,25 = 2 833 $ de pension admissible suffisent pour le crédit maximal; le fédéral n'en demande que 2 000 $.
+    const p: [Tp, Tp] = [{ age: 66, income: 40000, eligiblePension: 40000 }, { age: 66, income: 70000, eligiblePension: 0 }];
+    const r = optimizeSplit(p, t26);
+    expect(r.splitAmount[1]).toBeCloseTo(2833, -1);
+    expect(r.marginal[1]).toBeGreaterThan(r.marginal[0]);                              // légitime malgré un taux supérieur : le crédit vaut plus que l'écart
+    expect(cost(r)).toBeLessThanOrEqual(exhaustive(p, t26) + 1);
+    expect(cost(r)).toBeLessThan(cost(householdTax(p, t26)) - 100);
+  });
+  it("la tolérance n'écarte jamais l'impôt de plus que sa valeur, et la fixer à zéro donne le minimum", () => {
+    for (const { p, t } of households(200, 99)) {
+      const strict = cost(optimizeSplit(p, t, 0)), usual = cost(optimizeSplit(p, t));
+      expect(usual).toBeLessThanOrEqual(strict + SPLIT_TOLERANCE + 1e-6);
+    }
+  });
+});
+
+describe("fractionnement du revenu de pension : règles dans les projections", () => {
+  type Sp = Scenario["spouses"][0];
+  const person = (name: string, birthYear: number, o: { db?: number; dbStart?: number; rrq?: number; psv?: number; reer?: number } = {}): Sp => ({
+    name, birthYear, dbPensions: o.db ? [{ label: "RPA", annualAmount: o.db, startAge: o.dbStart ?? 60, indexation: 0.02, survivorPct: 0.6 }] : [],
+    rrq: { annualAmount: o.rrq ?? 0, startAge: 65 }, psv: { annualAmount: o.psv ?? 0, startAge: 65 }, reer: o.reer ?? 0, celi: 0, celiRoom: 0,
+  });
+  const scen = (a: Sp, b: Sp, spending: number): Scenario => ({
+    spouses: [a, b], targetNetSpending: spending,
+    assumptions: { startYear: 2026, endAge: 90, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 },
+  });
+  const S1 = () => scen(person("A", 1964, { reer: 1500000 }), person("B", 1956, { db: 25000, rrq: 14000, psv: 8700 }), 110000);
+  const S2 = () => scen(person("A", 1964, { db: 60000, reer: 100000 }), person("B", 1964, { reer: 20000 }), 60000);
+  const S3 = () => scen(person("A", 1956, { rrq: 18000, psv: 8700 }), person("B", 1958), 20000);
+  const S4 = () => scen(person("A", 1958, { db: 80000, rrq: 12000, psv: 8700 }), person("B", 1971), 60000);
+  const S5 = () => scen(person("Alex", 1960, { db: 45000, rrq: 14000, psv: 8700, reer: 600000 }), person("Sam", 1962, { db: 25000, rrq: 14000, psv: 8700, reer: 400000 }), 100000);
+  /** Pension admissible au fractionnement d'un conjoint pour l'année : rente de régime à tout âge, retraits du REER/FERR à partir de 65 ans. */
+  const eligible = (p: ReturnType<typeof runProjection>[0]["spouses"][0]) => p.pensionIncome + (p.age >= 65 ? p.reerWithdrawal : 0);
+
+  it("règle de l'âge : les retraits de REER d'un conjoint de moins de 65 ans ne se fractionnent pas, ceux à partir de 65 ans oui", () => {
+    const rows = runProjection(S1(), tax);                       // A n'a pas de rente : seulement des retraits de REER
+    expect(rows.filter((y) => y.spouses[0].age < 65).every((y) => y.spouses[0].pensionSplit >= 0)).toBe(true);
+    expect(rows.filter((y) => y.spouses[0].age < 65).every((y) => y.spouses[0].reerWithdrawal > 50000)).toBe(true);        // il y avait pourtant de gros retraits
+    expect(rows.filter((y) => y.spouses[0].age >= 65 && y.spouses[0].alive).some((y) => y.spouses[0].pensionSplit < 0)).toBe(true);
+  });
+  it("une rente de régime à prestations déterminées se fractionne à tout âge, même avant 65 ans", () => {
+    const y = runProjection(S2(), tax)[0];                       // 2026 : A et B ont 62 ans
+    expect(y.spouses[0].age).toBe(62);
+    expect(y.spouses[0].pensionSplit).toBeLessThan(-1000);
+    expect(y.spouses[1].pensionSplit).toBeGreaterThan(1000);
+  });
+  it("la RRQ et la PSV ne se fractionnent jamais", () => {
+    const rows = runProjection(S3(), tax);
+    expect(rows.every((y) => y.spouses[0].pensionSplit === 0 && y.spouses[1].pensionSplit === 0)).toBe(true);
+  });
+  it("l'âge de celui qui reçoit n'a pas d'importance : un conjoint de 55 ans ou de 62 ans peut recevoir", () => {
+    const y4 = runProjection(S4(), tax)[0];
+    expect(y4.spouses[1].age).toBe(55);
+    expect(y4.spouses[1].pensionSplit).toBeGreaterThan(10000);
+    const y1 = runProjection(S1(), tax)[0];                      // A (62 ans, sans rente) reçoit de B
+    expect(y1.spouses[0].age).toBe(62);
+    expect(y1.spouses[0].pensionSplit).toBeGreaterThan(0);
+  });
+  it("sur des projections complètes, chaque année, le conjoint qui cède transfère au plus 50 % de sa pension admissible", () => {
+    let cedants = 0;
+    for (const s of [S1(), S2(), S3(), S4(), S5()]) {
+      for (const y of runProjection(s, tax)) {
+        if (!y.spouses[0].alive || !y.spouses[1].alive) continue;
+        expect(Math.abs(y.spouses[0].pensionSplit + y.spouses[1].pensionSplit)).toBeLessThan(1e-6);       // le transfert se retrouve des deux côtés
+        for (const p of y.spouses) if (p.pensionSplit < 0) { cedants++; expect(-p.pensionSplit).toBeLessThanOrEqual(MAX_SPLIT_SHARE * eligible(p) + 0.01); }
+      }
+    }
+    expect(cedants).toBeGreaterThan(50);                          // le contrôle porte bien sur de nombreuses années de fractionnement
+  });
+  it("le plafond est atteint mais jamais dépassé quand le revenu de pension est très inégal", () => {
+    const rows = runProjection(S4(), tax);
+    const y = rows[0];
+    expect(-y.spouses[0].pensionSplit).toBeCloseTo(0.5 * eligible(y.spouses[0]), 6);
+    for (const r of rows.filter((x) => x.spouses[0].alive && x.spouses[1].alive)) expect(-r.spouses[0].pensionSplit).toBeLessThanOrEqual(0.5 * eligible(r.spouses[0]) + 0.01);
+  });
+  it("l'option « fractionnement » désactivée supprime tous les transferts, y compris ceux qui débloquent des crédits", () => {
+    for (const s of [S1(), S2(), S4()]) {
+      const rows = runProjection({ ...s, assumptions: { ...s.assumptions, pensionSplitting: false } }, tax);
+      expect(rows.every((y) => y.spouses[0].pensionSplit === 0 && y.spouses[1].pensionSplit === 0)).toBe(true);
+    }
   });
 });
