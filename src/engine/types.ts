@@ -20,6 +20,7 @@ export interface JurisdictionTax {
 
 export interface TaxYearTable {
   year: number;
+  rrqMaxAt65: number; // rente de retraite maximale du RRQ à 65 ans, par année (sert à la réduction avant 65 ans)
   federal: JurisdictionTax & {
     quebecAbatement: number;
     pensionIncomeAmount: number;
@@ -42,7 +43,11 @@ export interface DbPension {
 }
 
 export interface PublicBenefit {
-  annualAmount: number; // montant annuel au départ choisi
+  /**
+   * Montant annuel à 65 ans (âge « normal »), en $ de startYear. L'âge de début le réduit (RRQ avant 65 ans) ou le bonifie
+   * (RRQ jusqu'à 72 ans, PSV jusqu'à 70 ans) : voir `benefits.ts`.
+   */
+  annualAmount: number;
   startAge: number;
 }
 

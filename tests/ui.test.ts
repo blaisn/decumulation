@@ -13,6 +13,14 @@ import { shareComplement } from "../ui/src/model";
 import { deathMatrix, deathRankTable } from "../ui/src/tables";
 import { compareLongevity } from "../src/index";
 import { summarize } from "../src/index";
+import { ALL_FREE, benefitRanges, choiceKey, currentChoice, enumerateChoices, evaluateChoices, rankResults } from "../src/index";
+import type { BenefitChoice, ChoiceResult, OptimizationResult, Scenario } from "../src/index";
+import { RRQ_MAX_AT_65, applyBenefitChoice, benefitHint } from "../ui/src/model";
+import { choiceText, durationText, estimateSeconds, optionRows, plannedCount, progressText, resultsTable, verdictHtml } from "../ui/src/optimize-view";
+import { OptimizationCancelled, chunkChoices, runChoices, workerCount } from "../ui/src/optimize-run";
+import type { PoolWorker } from "../ui/src/optimize-run";
+import { runJob } from "../ui/src/compute";
+import type { Job } from "../ui/src/compute";
 
 const tax = table2026 as unknown as TaxYearTable;
 const has = (text: string, part: string) => text.includes(part);
@@ -605,5 +613,349 @@ describe("graphique « D'où vient l'argent » : le manque de fonds", () => {
     expect(hs.length).toBeGreaterThan(5);
     expect(hs.every((h) => h > 0)).toBe(true);
     expect(hs[hs.length - 1]).toBeGreaterThan(hs[0]);     // le manque grandit à mesure que les actifs s'épuisent
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("formulaire : RRQ et PSV au montant de 65 ans", () => {
+  const plain = (t: string) => t.replace(/[\u00a0\u202f]/g, " ");
+  it("l'aperçu de la rente ajustée : 65 ans, sans ajustement", () => {
+    expect(benefitHint("rrq", "14000", "65")).toBe("À 65 ans : le montant de 65 ans, sans réduction ni bonification.");
+    expect(benefitHint("psv", "8700", "65")).toBe("À 65 ans : le montant de 65 ans, sans réduction ni bonification.");
+  });
+  it("RRQ reportée : montant bonifié et pourcentage", () => {
+    const t = plain(benefitHint("rrq", "14000", "70"));
+    expect(t).toContain("19 880 $");           // 14 000 x 1,42
+    expect(t).toContain("+42,0 %");
+    expect(plain(benefitHint("rrq", "14000", "72"))).toContain("+58,8 %");
+  });
+  it("RRQ anticipée : réduction de 36 % pour la rente maximale à 60 ans, moindre pour une plus petite rente", () => {
+    const max = plain(benefitHint("rrq", String(RRQ_MAX_AT_65), "60"));
+    expect(max).toContain("−36,0 %");
+    expect(max).toContain("11 579 $");         // 18 091,80 x 0,64
+    const small = plain(benefitHint("rrq", "9000", "60"));
+    expect(small).toMatch(/−3[0-5],\d %/);
+    expect(small).not.toContain("−36,0 %");
+  });
+  it("PSV reportée de cinq ans : +36 %", () => {
+    const t = plain(benefitHint("psv", "8700", "70"));
+    expect(t).toContain("11 832 $");
+    expect(t).toContain("+36,0 %");
+  });
+  it("aucun aperçu si le montant ou l'âge n'est pas valide ou hors des limites", () => {
+    for (const [k, a, age] of [["rrq", "abc", "65"], ["rrq", "14000", ""], ["rrq", "-5", "65"], ["rrq", "14000", "59"], ["rrq", "14000", "73"], ["psv", "8700", "64"], ["psv", "8700", "71"], ["psv", "8700", "66,5"]] as const) {
+      expect(benefitHint(k, a, age)).toBe("");
+    }
+  });
+  it("le formulaire demande les montants à 65 ans et affiche l'aperçu sous chaque rente", () => {
+    const f = defaultForm();
+    f.spouses[1].rrqStartAge = "70";
+    const html = plain(renderForm(f, new Set(["spouse0", "spouse1"])));
+    expect(html).toContain("RRQ, montant annuel à 65 ans");
+    expect(html).toContain("PSV, montant annuel à 65 ans");
+    expect(html).toContain("De 60 à 72 ans");
+    expect(html).toContain("De 65 à 70 ans");
+    expect(html).toContain('data-benefit-hint="spouses.0.rrq"');
+    expect(html).toContain('data-benefit-hint="spouses.1.psv"');
+    const hint = /data-benefit-hint="spouses\.1\.rrq"[^>]*>([^<]*)</.exec(html)![1];
+    expect(hint).toContain("+42,0 %");
+  });
+  it("le suivi des changements nomme les montants « à 65 ans »", () => {
+    const a = defaultForm(), b = JSON.parse(JSON.stringify(a)) as typeof a;
+    b.spouses[0].rrqAmount = "15000"; b.spouses[0].psvStartAge = "68";
+    expect(describeChanges(a, b)).toEqual(["Alex, RRQ, montant à 65 ans : 14000 → 15000", "Alex, PSV, début : 65 → 68"]);
+  });
+  it("appliquer une combinaison met à jour les quatre âges de début et rien d'autre", () => {
+    const f = defaultForm();
+    const before = JSON.stringify({ ...f, spouses: f.spouses.map((s) => ({ ...s, rrqStartAge: 0, psvStartAge: 0 })) });
+    applyBenefitChoice(f, { rrq: [66, 70], psv: [67, 69] });
+    expect([f.spouses[0].rrqStartAge, f.spouses[1].rrqStartAge, f.spouses[0].psvStartAge, f.spouses[1].psvStartAge]).toEqual(["66", "70", "67", "69"]);
+    expect(JSON.stringify({ ...f, spouses: f.spouses.map((s) => ({ ...s, rrqStartAge: 0, psvStartAge: 0 })) })).toBe(before);
+    const sc = toScenario(f).scenario!;
+    expect(currentChoice(sc)).toEqual({ rrq: [66, 70], psv: [67, 69] });
+  });
+});
+
+describe("onglet Optimisation PSV/RRQ : vue", () => {
+  const scenario = toScenario(defaultForm()).scenario!;      // Alex 66 ans (rentes commencées), Sam 64 ans
+  const choices = enumerateChoices(benefitRanges(scenario, ALL_FREE));
+  const mk = (choice: BenefitChoice, estate: number, shortfall = 0): ChoiceResult => ({
+    choice, key: choiceKey(choice), afterTaxEstate: estate, totalShortfall: shortfall, yearsWithShortfall: shortfall > 0 ? 3 : 0, totalTax: 100000, totalClawback: 0,
+    nominal: { afterTaxEstate: estate * 1.5, totalShortfall: shortfall * 1.5, totalTax: 150000, totalClawback: 0 },
+  });
+  const cur = choiceKey(currentChoice(scenario));
+  /** La succession augmente avec le rang du tableau `choices`, sauf pour les choix actuels qui reçoivent `currentEstate`. */
+  const results = (currentEstate: number, shortfallOf: (k: number) => number = () => 0) =>
+    choices.map((c, k) => (choiceKey(c) === cur ? mk(c, currentEstate, shortfallOf(-1)) : mk(c, 1_000_000 + k * 1000, shortfallOf(k))));
+  const plain = (t: string) => t.replace(/[\u00a0\u202f]/g, " ");
+  const visible = (t: string) => plain(t.replace(/<[^>]+>/g, ""));       // texte affiché, sans les balises
+
+  it("le scénario d'essai : 54 combinaisons, Alex n'a rien à choisir", () => {
+    expect(choices.length).toBe(54);
+    expect(plannedCount(scenario, ALL_FREE)).toBe(54);
+    expect(plannedCount(scenario, { rrq: [true, false], psv: [true, true] })).toBe(6);
+    expect(plannedCount(scenario, { rrq: [false, false], psv: [false, false] })).toBe(1);
+  });
+  it("les cases à cocher : une par rente à explorer, et les rentes déjà commencées sont grisées avec la raison", () => {
+    const html = plain(optionRows(scenario, ALL_FREE));
+    expect(html).toContain('data-free="rrq:1"');
+    expect(html).toContain('data-free="psv:1"');
+    expect(html).not.toContain('data-free="rrq:0"');
+    expect(html).toContain("RRQ : déjà commencée à 65 ans");
+    expect(html).toContain("PSV : déjà commencée à 65 ans");
+    expect(html).toContain("RRQ : essayer de 64 à 72 ans");
+    expect(html).toContain("(9 choix)");
+    expect(html).toContain("PSV : essayer de 65 à 70 ans");
+    expect((html.match(/ disabled/g) ?? []).length).toBe(2);
+    expect((html.match(/ checked/g) ?? []).length).toBe(2);
+  });
+  it("une case décochée n'est plus cochée", () => {
+    const html = optionRows(scenario, { rrq: [true, false], psv: [true, true] });
+    expect(/data-free="rrq:1" checked/.test(html)).toBe(false);
+    expect(/data-free="psv:1" checked/.test(html)).toBe(true);
+  });
+  it("les prénoms sont échappés", () => {
+    const sc = { ...scenario, spouses: [{ ...scenario.spouses[0], name: "<b>Zoé</b>" }, scenario.spouses[1]] } as Scenario;
+    expect(optionRows(sc, ALL_FREE)).toContain("&lt;b&gt;Zoé&lt;/b&gt;");
+    expect(optionRows(sc, ALL_FREE)).not.toContain("<b>Zoé</b>");
+    expect(choiceText(sc, currentChoice(sc))).not.toContain("<b>Zoé</b>");
+  });
+  it("estimation de la durée : proportionnelle aux combinaisons, divisée par les workers", () => {
+    expect(estimateSeconds(1000, 50, 1)).toBeCloseTo(57.5, 6);
+    expect(estimateSeconds(1000, 50, 5)).toBeCloseTo(11.5, 6);
+    expect(estimateSeconds(10, 0, 0)).toBeGreaterThan(0);
+    expect(durationText(2)).toBe("quelques secondes");
+    expect(durationText(12)).toBe("environ 10 secondes");
+    expect(durationText(47)).toBe("environ 45 secondes");
+    expect(durationText(150)).toBe("environ 3 minutes");
+  });
+  it("texte de progression, avec le temps restant", () => {
+    expect(progressText(0, 480, 0)).toBe("0 sur 480 combinaisons essayées…");
+    expect(plain(progressText(120, 480, 10000))).toBe("120 sur 480 combinaisons essayées, il reste environ 30 secondes.");
+    expect(plain(progressText(480, 480, 40000))).toBe("480 sur 480 combinaisons essayées.");
+  });
+
+  const rank = (r: ChoiceResult[]): OptimizationResult => rankResults(scenario, r);
+  it("verdict : les choix actuels sont déjà les meilleurs", () => {
+    const res = rank(results(9_999_999));
+    const t = plain(verdictHtml(scenario, res, true));
+    expect(t).toContain("Vos choix actuels sont déjà les meilleurs parmi les 54 combinaisons essayées");
+    expect(t).toContain("9 999 999 $");
+  });
+  it("verdict : la meilleure combinaison laisse X de plus, avec les âges de chaque conjoint", () => {
+    const res = rank(results(1_000_000));
+    const best = res.best.afterTaxEstate;
+    const t = plain(verdictHtml(scenario, res, true));
+    expect(t).toContain("La meilleure combinaison, parmi les 54 essayées, laisse");
+    expect(t).toContain(`${plain(String(Math.round(best - 1_000_000)).replace(/\B(?=(\d{3})+(?!\d))/g, " "))} $ de plus`);
+    expect(t).toContain("Alex</strong> : RRQ à 65 ans, PSV à 65 ans");
+    expect(t).toContain("Sam</strong> : RRQ à");
+    expect(t).toContain("L'écart entre la meilleure et la pire combinaison");
+  });
+  it("verdict : les montants suivent l'unité choisie (dollars courants = x 1,5 dans ce jeu d'essai)", () => {
+    const res = rank(results(1_000_000));
+    const reel = plain(verdictHtml(scenario, res, true)), nominal = plain(verdictHtml(scenario, res, false));
+    expect(reel).not.toBe(nominal);
+    expect(nominal).toContain("1 500 000 $");
+  });
+  it("verdict : les choix actuels manquent d'argent, la meilleure combinaison finance tout", () => {
+    const res = rank(results(500_000, (k) => (k === -1 ? 25_000 : 0)));
+    const t = visible(verdictHtml(scenario, res, true));
+    expect(t).toContain("Avec vos choix actuels, il manque 25 000 $ au total (3 années)");
+    expect(t).toContain("finance toutes les dépenses");
+  });
+  it("verdict : aucune combinaison ne finance tout", () => {
+    const res = rank(results(100, (k) => (k === -1 ? 90_000 : 40_000 - k)));
+    expect(res.anyFeasible).toBe(false);
+    const t = plain(verdictHtml(scenario, res, true));
+    expect(t).toContain("Aucune des 54 combinaisons ne finance toutes les dépenses");
+    expect(t).toContain("90 000 $");
+  });
+  it("tableau : dix meilleures combinaisons, puis les choix actuels s'ils sont plus bas", () => {
+    const res = rank(results(1_000_000));
+    const html = resultsTable(scenario, res, true);
+    const rows = html.split("<tbody>")[1].split("</tr>").filter((r) => r.includes("<tr"));
+    expect(rows.length).toBe(11);
+    expect(rows[0]).toContain('class="best"');
+    expect(rows[0]).toContain("n° 1");
+    expect(rows[10]).toContain('class="current"');
+    expect(visible(rows[10])).toContain("Vos choix actuels (n° 54)");
+    expect(rows[10]).not.toContain("apply-benefits");
+    const buttons = [...html.matchAll(/data-action="apply-benefits" data-index="(\d+)"/g)].map((m) => Number(m[1]));
+    expect(buttons).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+  it("tableau : les choix actuels dans les dix premiers sont repérés sans bouton, et les âges modifiés sont en évidence", () => {
+    const res = rank(results(9_999_999));
+    const html = resultsTable(scenario, res, true);
+    const rows = html.split("<tbody>")[1].split("</tr>").filter((r) => r.includes("<tr"));
+    expect(rows.length).toBe(10);
+    expect(rows[0]).toContain('class="current best"');
+    expect((rows[0].match(/class="chg"/g) ?? []).length).toBe(0);                         // aucun âge ne diffère des choix actuels
+    expect((rows[1].match(/class="chg"/g) ?? []).length).toBeGreaterThan(0);
+    expect((html.match(/apply-benefits/g) ?? []).length).toBe(9);
+  });
+  it("tableau : écart de succession avec signe, manque cumulé et en-têtes avec les prénoms", () => {
+    const res = rank(results(1_000_000));
+    const html = plain(resultsTable(scenario, res, true));
+    expect(html).toContain("+53 000 $");                  // meilleure (1 053 000 $) moins choix actuels (1 000 000 $)
+    expect(html).toContain("Aucun");
+    expect(html).toContain('<span class="sub">Alex</span>');
+    expect(html).toContain('<span class="sub">Sam</span>');
+    const bad = rank(results(100, (k) => (k === -1 ? 90_000 : 40_000 - k)));
+    const t = plain(resultsTable(scenario, bad, true));
+    expect(t).toContain("90 000 $");
+    expect(t).not.toContain("Aucun");
+    expect(t).not.toContain('class="best"');             // aucune combinaison ne finance tout : pas de mise en évidence « meilleure »
+  });
+});
+
+describe("onglet Optimisation PSV/RRQ : calcul parallèle", () => {
+  const scenario = toScenario(defaultForm()).scenario!;
+  const choices = enumerateChoices(benefitRanges(scenario, ALL_FREE)).slice(0, 20);      // 20 combinaisons
+  const expected = evaluateChoices(scenario, tax, choices);                                // calculées une seule fois
+  const lookup = new Map(expected.map((r) => [r.key, r]));
+  const fastEval = (job: Job) => (job as Extract<Job, { kind: "choices" }>).choices.map((c) => lookup.get(choiceKey(c))!);
+  const sameAsExpected = (r: ChoiceResult[]) => JSON.stringify(r) === JSON.stringify(expected);
+
+  /** Faux worker : répond de façon asynchrone, comme un vrai, avec diverses pannes possibles. */
+  class FakeWorker implements PoolWorker {
+    static all: FakeWorker[] = []; static inFlight = 0; static maxInFlight = 0;
+    onmessage: PoolWorker["onmessage"] = null; onerror: PoolWorker["onerror"] = null;
+    terminated = false; handled = 0;
+    constructor(private mode: "ok" | "load-error" | "bad-result" | "dies-after-first" = "ok", private compute: (j: Job) => unknown = fastEval) { FakeWorker.all.push(this); }
+    static reset() { FakeWorker.all = []; FakeWorker.inFlight = 0; FakeWorker.maxInFlight = 0; }
+    postMessage(m: { id: number; job: Job }) {
+      FakeWorker.inFlight++; FakeWorker.maxInFlight = Math.max(FakeWorker.maxInFlight, FakeWorker.inFlight);
+      setTimeout(() => {
+        FakeWorker.inFlight--;
+        if (this.terminated) return;
+        this.handled++;
+        if (this.mode === "load-error" || (this.mode === "dies-after-first" && this.handled > 1)) { this.onerror?.({}); return; }
+        if (this.mode === "bad-result") { this.onmessage?.({ data: { id: m.id, ok: false, error: "échec simulé" } }); return; }
+        this.onmessage?.({ data: { id: m.id, ok: true, result: this.compute(m.job) } });
+      }, 2);
+    }
+    terminate() { this.terminated = true; }
+  }
+  const tick = (ms = 30) => new Promise<void>((r) => setTimeout(r, ms));
+
+  it("découpe en lots et choisit le nombre de workers en laissant un cœur libre", () => {
+    expect(chunkChoices([1, 2, 3, 4, 5, 6, 7], 3)).toEqual([[1, 2, 3], [4, 5, 6], [7]]);
+    expect(chunkChoices([], 3)).toEqual([]);
+    expect([undefined, 1, 2, 4, 8, 32].map(workerCount)).toEqual([3, 1, 1, 3, 7, 8]);
+  });
+  it("répartit le travail entre plusieurs workers et rend les résultats dans l'ordre", async () => {
+    FakeWorker.reset();
+    const progress: [number, number][] = [];
+    const run = runChoices(scenario, {}, choices, (d, t) => progress.push([d, t]), { createWorker: () => new FakeWorker(), workers: 3, chunkSize: 4, evaluate: fastEval });
+    const res = await run.promise;
+    expect(sameAsExpected(res)).toBe(true);
+    expect(FakeWorker.all.length).toBe(3);
+    expect(FakeWorker.maxInFlight).toBe(3);                      // trois lots en parallèle
+    expect(FakeWorker.all.every((w) => w.terminated)).toBe(true);
+    expect(progress[0]).toEqual([0, 20]);
+    expect(progress[progress.length - 1]).toEqual([20, 20]);
+    for (let k = 1; k < progress.length; k++) expect(progress[k][0]).toBeGreaterThan(progress[k - 1][0]);
+    expect(FakeWorker.all.reduce((n, w) => n + w.handled, 0)).toBe(5);          // 20 combinaisons en lots de 4
+  });
+  it("n'utilise pas plus de workers qu'il n'y a de lots", async () => {
+    FakeWorker.reset();
+    await runChoices(scenario, {}, choices.slice(0, 5), () => {}, { createWorker: () => new FakeWorker(), workers: 8, chunkSize: 4, evaluate: fastEval }).promise;
+    expect(FakeWorker.all.length).toBe(2);
+  });
+  it("avec le vrai calcul : mêmes résultats qu'une évaluation directe", async () => {
+    FakeWorker.reset();
+    const few = choices.slice(0, 6);
+    const res = await runChoices(scenario, {}, few, () => {}, { createWorker: () => new FakeWorker("ok", (j) => runJob(j)), workers: 2, chunkSize: 3, evaluate: runJob }).promise;
+    expect(JSON.stringify(res)).toBe(JSON.stringify(evaluateChoices(scenario, tax, few)));
+  });
+  it("sans worker, le calcul se fait dans le fil principal, une combinaison à la fois, en rendant la main à l'interface entre chacune", async () => {
+    let yields = 0, calls = 0;
+    const progress: number[] = [];
+    const res = await runChoices(scenario, {}, choices, (d) => progress.push(d), {
+      chunkSize: 4, evaluate: (j) => { calls++; return fastEval(j); }, yieldToUi: async () => { yields++; },
+    }).promise;
+    expect(sameAsExpected(res)).toBe(true);
+    expect(yields).toBe(20);                 // une pause avant chaque combinaison
+    expect(calls).toBe(20);
+    expect(progress.length).toBe(26);        // 0, puis une mise à jour par combinaison (20) et une par lot terminé (5)
+    for (let k = 1; k < progress.length; k++) expect(progress[k]).toBeGreaterThanOrEqual(progress[k - 1]);
+    expect(progress[progress.length - 1]).toBe(20);
+  });
+  it("le lot par défaut est petit (4 combinaisons) pour que les workers répondent souvent", async () => {
+    FakeWorker.reset();
+    await runChoices(scenario, {}, choices, () => {}, { createWorker: () => new FakeWorker(), workers: 2, evaluate: fastEval }).promise;
+    expect(FakeWorker.all.reduce((n, w) => n + w.handled, 0)).toBe(5);       // 20 combinaisons : 5 lots de 4
+  });
+  it("si la création du worker échoue, le calcul continue dans le fil principal", async () => {
+    const res = await runChoices(scenario, {}, choices, () => {}, { createWorker: () => { throw new Error("pas de worker"); }, workers: 3, chunkSize: 4, evaluate: fastEval }).promise;
+    expect(sameAsExpected(res)).toBe(true);
+  });
+  it("si un worker ne se charge pas, le calcul continue dans le fil principal et les workers sont arrêtés", async () => {
+    FakeWorker.reset();
+    const res = await runChoices(scenario, {}, choices, () => {}, { createWorker: () => new FakeWorker("load-error"), workers: 3, chunkSize: 4, evaluate: fastEval }).promise;
+    expect(sameAsExpected(res)).toBe(true);
+    expect(FakeWorker.all.every((w) => w.terminated)).toBe(true);
+  });
+  it("si un worker répond par une erreur, le calcul continue dans le fil principal", async () => {
+    FakeWorker.reset();
+    const res = await runChoices(scenario, {}, choices, () => {}, { createWorker: () => new FakeWorker("bad-result"), workers: 2, chunkSize: 4, evaluate: fastEval }).promise;
+    expect(sameAsExpected(res)).toBe(true);
+  });
+  it("si un worker tombe en panne en cours de route, seuls les lots manquants sont recalculés, sans doublon", async () => {
+    FakeWorker.reset();
+    let inline = 0;
+    let n = 0;
+    const res = await runChoices(scenario, {}, choices, () => {}, {
+      createWorker: () => new FakeWorker(n++ === 0 ? "ok" : "dies-after-first"), workers: 2, chunkSize: 2,
+      evaluate: (j) => { inline++; return fastEval(j); },
+    }).promise;
+    expect(sameAsExpected(res)).toBe(true);
+    expect(res.length).toBe(20);
+    expect(inline).toBeLessThan(20);              // 20 combinaisons : une partie a été calculée par les workers
+    expect(inline % 2).toBe(0);                    // et le calcul de secours ne refait que des lots entiers (lots de 2)
+  });
+  it("annuler rejette avec OptimizationCancelled, arrête les workers et ignore les réponses tardives", async () => {
+    FakeWorker.reset();
+    const progress: number[] = [];
+    const run = runChoices(scenario, {}, choices, (d) => progress.push(d), { createWorker: () => new FakeWorker(), workers: 2, chunkSize: 4, evaluate: fastEval });
+    run.cancel();
+    let error: unknown = null;
+    try { await run.promise; } catch (e) { error = e; }
+    expect(error instanceof OptimizationCancelled).toBe(true);
+    expect((error as Error).message).toBe("Optimisation annulée");
+    expect(FakeWorker.all.every((w) => w.terminated)).toBe(true);
+    await tick();
+    expect(Math.max(...progress)).toBe(0);        // rien n'a été compté après l'annulation
+  });
+  it("annuler pendant un calcul dans le fil principal l'arrête", async () => {
+    let done = 0;
+    const run = runChoices(scenario, {}, choices, (d) => { done = d; }, { chunkSize: 2, evaluate: fastEval, yieldToUi: () => tick(4) });
+    await tick(14);
+    run.cancel();
+    let cancelled = false;
+    try { await run.promise; } catch (e) { cancelled = e instanceof OptimizationCancelled; }
+    expect(cancelled).toBe(true);
+    const at = done;
+    await tick(40);
+    expect(done).toBe(at);                          // plus aucun lot calculé après l'annulation
+    expect(at).toBeLessThan(20);
+  });
+  it("annuler après la fin ne change rien", async () => {
+    const run = runChoices(scenario, {}, choices.slice(0, 4), () => {}, { chunkSize: 4, evaluate: fastEval });
+    const res = await run.promise;
+    run.cancel();
+    expect(res.length).toBe(4);
+  });
+  it("sans combinaison, le résultat est vide tout de suite", async () => {
+    const calls: [number, number][] = [];
+    const res = await runChoices(scenario, {}, [], (d, t) => calls.push([d, t]), { evaluate: fastEval }).promise;
+    expect(res).toEqual([]);
+    expect(calls).toEqual([[0, 0]]);
+  });
+  it("une erreur du calcul de secours est rapportée", async () => {
+    let message = "";
+    try { await runChoices(scenario, {}, choices, () => {}, { chunkSize: 4, evaluate: () => { throw new Error("calcul impossible"); } }).promise; } catch (e) { message = (e as Error).message; }
+    expect(message).toBe("calcul impossible");
   });
 });

@@ -1,4 +1,4 @@
-import { STRATEGY_NAMES, shareComplement } from "./model";
+import { STRATEGY_NAMES, benefitHint, shareComplement } from "./model";
 import type { FormState, SpouseForm } from "./model";
 import { esc } from "./format";
 
@@ -54,10 +54,12 @@ function spouseSection(sp: SpouseForm, i: number, open: boolean, first: SpouseFo
       ${field("Compte non enregistré", `${b}.nonReg`, sp.nonReg, { suffix: "$" })}
     </div></fieldset>
     <fieldset><legend>Rente du Québec et pension de la sécurité de la vieillesse</legend><div class="grid">
-      ${field("RRQ, montant annuel", `${b}.rrqAmount`, sp.rrqAmount, { suffix: "$", hint: "Au moment où la rente débute" })}
-      ${field("RRQ, début à", `${b}.rrqStartAge`, sp.rrqStartAge, { suffix: "ans" })}
-      ${field("PSV, montant annuel", `${b}.psvAmount`, sp.psvAmount, { suffix: "$", hint: "Ajoutez la bonification de 10 % à 75 ans si elle s'applique" })}
-      ${field("PSV, début à", `${b}.psvStartAge`, sp.psvStartAge, { suffix: "ans" })}
+      ${field("RRQ, montant annuel à 65 ans", `${b}.rrqAmount`, sp.rrqAmount, { suffix: "$", hint: "Avant réduction ou bonification" })}
+      ${field("RRQ, début à", `${b}.rrqStartAge`, sp.rrqStartAge, { suffix: "ans", hint: "De 60 à 72 ans" })}
+      <p class="hint wide benefit" data-benefit-hint="${b}.rrq" aria-live="polite">${esc(benefitHint("rrq", sp.rrqAmount, sp.rrqStartAge))}</p>
+      ${field("PSV, montant annuel à 65 ans", `${b}.psvAmount`, sp.psvAmount, { suffix: "$", hint: "Avant bonification de report. Ajoutez la bonification de 10 % à 75 ans si elle s'applique" })}
+      ${field("PSV, début à", `${b}.psvStartAge`, sp.psvStartAge, { suffix: "ans", hint: "De 65 à 70 ans" })}
+      <p class="hint wide benefit" data-benefit-hint="${b}.psv" aria-live="polite">${esc(benefitHint("psv", sp.psvAmount, sp.psvStartAge))}</p>
     </div></fieldset>
     <fieldset><legend>Rentes de régimes à prestations déterminées</legend>
       ${pensionRows(sp, i)}

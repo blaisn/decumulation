@@ -5,7 +5,9 @@ import type { Job } from "./compute";
 self.onmessage = (e: MessageEvent<{ id: number; job: Job }>) => {
   const { id, job } = e.data;
   try {
-    (self as unknown as Worker).postMessage({ id, ok: true, result: runJob(job) });
+    const t0 = performance.now();
+    const result = runJob(job);
+    (self as unknown as Worker).postMessage({ id, ok: true, result, ms: performance.now() - t0 });
   } catch (err) {
     (self as unknown as Worker).postMessage({ id, ok: false, error: err instanceof Error ? err.message : String(err) });
   }

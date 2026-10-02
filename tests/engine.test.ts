@@ -4,6 +4,9 @@ import { progressiveTax, householdTax, optimizeSplit, indexTable, marginalRate }
 import { runProjection, dbAmount } from "../src/engine/projection";
 import { compareStrategies, defaultCandidates, compareDeathOrders, deathScenarios, applyDeathScenario, summarize, compareLongevity, longevityScenarios } from "../src/engine/compare";
 import { gompertz, representativeDeathAges } from "../src/engine/mortality";
+import { PSV_AGES, RRQ_AGES, psvAmount, psvFactor, rrqAmount, rrqEarlyMonthlyRate, rrqFactor } from "../src/engine/benefits";
+import { ALL_FREE, ageAtPlanEnd, applyChoice, benefitRanges, choiceKey, compareResults, countChoices, currentChoice, enumerateChoices, evaluateChoice, evaluateChoices, isFeasible, optimizeBenefits, rankResults } from "../src/engine/optimize";
+import type { ChoiceResult, FreeChoices } from "../src/engine/optimize";
 import type { Scenario, TaxYearTable } from "../src/engine/types";
 
 const tax = table2026 as unknown as TaxYearTable;
@@ -655,5 +658,310 @@ describe("répartition des dépenses visées entre les conjoints", () => {
     const a = runProjection(mk(0.5), tax), b = runProjection(mk(0.9), tax);
     const strip = (rows: typeof a) => rows.map((y) => ({ ...y, spouses: y.spouses.map((p) => ({ ...p, spending: 0, spendingShare: 0 })) }));
     expect(JSON.stringify(strip(a))).toBe(JSON.stringify(strip(b)));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("RRQ et PSV : réduction avant 65 ans et bonification du report", () => {
+  const MAX = 18091.8;      // rente RRQ maximale à 65 ans en 2026 (1 507,65 $ x 12)
+
+  it("la table fiscale 2026 contient la rente maximale de Retraite Québec", () => {
+    expect(tax.rrqMaxAt65).toBeCloseTo(1507.65 * 12, 2);
+  });
+  it("RRQ à 65 ans : ni réduction ni bonification", () => {
+    expect(rrqFactor(65, 14000, MAX)).toBe(1);
+    expect(rrqFactor(65, 0, MAX)).toBe(1);
+  });
+  it("RRQ après 65 ans : +0,7 % par mois, soit +8,4 % par année, jusqu'à +58,8 % à 72 ans", () => {
+    expect(rrqFactor(66, 14000, MAX)).toBeCloseTo(1.084, 10);
+    expect(rrqFactor(70, 14000, MAX)).toBeCloseTo(1.42, 10);      // +42 % à 70 ans (Retraite Québec)
+    expect(rrqFactor(72, 14000, MAX)).toBeCloseTo(1.588, 10);     // +58,8 % à 72 ans
+    expect(rrqFactor(75, 14000, MAX)).toBeCloseTo(1.588, 10);     // la rente cesse d'augmenter après 72 ans
+  });
+  it("RRQ avant 65 ans, rente maximale : -0,6 % par mois, soit -36 % à 60 ans", () => {
+    expect(rrqFactor(60, MAX, MAX)).toBeCloseTo(0.64, 10);
+    expect(rrqFactor(62, MAX, MAX)).toBeCloseTo(0.784, 10);
+    expect(rrqFactor(64, MAX, MAX)).toBeCloseTo(0.928, 10);
+    expect(MAX * rrqFactor(60, MAX, MAX) / 12).toBeCloseTo(964.9, 0);      // 964,90 $ par mois à 60 ans, selon Retraite Québec
+  });
+  it("RRQ avant 65 ans, rente très faible : environ -0,5 % par mois, soit -30 % à 60 ans", () => {
+    expect(rrqFactor(60, 0, MAX)).toBeCloseTo(0.7, 10);
+    expect(rrqEarlyMonthlyRate(0, MAX)).toBeCloseTo(0.005, 12);
+    expect(rrqEarlyMonthlyRate(MAX, MAX)).toBeCloseTo(0.006, 12);
+  });
+  it("la réduction augmente avec le montant de la rente, sans jamais dépasser 0,6 % par mois", () => {
+    let prev = 1;
+    for (const amount of [0, 4000, 8000, 12000, 16000, MAX, 25000, 1e6]) {
+      const f = rrqFactor(60, amount, MAX);
+      expect(f).toBeLessThanOrEqual(prev + 1e-12);        // plus la rente est élevée, plus le facteur baisse
+      expect(f).toBeGreaterThanOrEqual(0.64 - 1e-12);     // jamais plus de 36 % de réduction
+      expect(f).toBeLessThanOrEqual(0.7 + 1e-12);         // jamais moins de 30 %
+      prev = f;
+    }
+    expect(rrqEarlyMonthlyRate(MAX / 2, MAX)).toBeCloseTo(0.0055, 12);
+    expect(rrqEarlyMonthlyRate(5, 0)).toBeCloseTo(0.006, 12);      // rente maximale inconnue : taux maximal
+  });
+  it("les âges hors des limites sont ramenés aux limites (RRQ 60 à 72 ans, PSV 65 à 70 ans)", () => {
+    expect(rrqFactor(55, MAX, MAX)).toBe(rrqFactor(60, MAX, MAX));
+    expect(rrqFactor(80, 14000, MAX)).toBe(rrqFactor(72, 14000, MAX));
+    expect(psvFactor(60)).toBe(1);
+    expect(psvFactor(75)).toBe(psvFactor(70));
+    expect([RRQ_AGES.min, RRQ_AGES.normal, RRQ_AGES.max, PSV_AGES.min, PSV_AGES.max]).toEqual([60, 65, 72, 65, 70]);
+  });
+  it("PSV : +0,6 % par mois de report, soit +7,2 % par année, jusqu'à +36 % à 70 ans", () => {
+    expect(psvFactor(65)).toBe(1);
+    expect(psvFactor(66)).toBeCloseTo(1.072, 10);
+    expect(psvFactor(68)).toBeCloseTo(1.216, 10);        // 36 mois x 0,6 % = 21,6 % (Service Canada)
+    expect(psvFactor(70)).toBeCloseTo(1.36, 10);         // 60 mois x 0,6 % = 36 %
+  });
+  it("rrqAmount et psvAmount appliquent le facteur au montant de 65 ans", () => {
+    expect(rrqAmount({ annualAmount: 10000, startAge: 70 }, MAX)).toBeCloseTo(14200, 8);
+    expect(psvAmount({ annualAmount: 8700, startAge: 70 })).toBeCloseTo(11832, 8);
+  });
+});
+
+describe("projection : RRQ et PSV reportées ou anticipées", () => {
+  const person = (name: string, birthYear: number, rrqAge: number, psvAge: number, extra: Partial<Scenario["spouses"][0]> = {}) => ({
+    name, birthYear, dbPensions: [], rrq: { annualAmount: 14000, startAge: rrqAge }, psv: { annualAmount: 8700, startAge: psvAge },
+    reer: 800000, celi: 100000, celiRoom: 30000, ...extra,
+  });
+  const scen = (a: Scenario["spouses"][0], b: Scenario["spouses"][0], extra: Partial<Scenario["assumptions"]> = {}): Scenario => ({
+    spouses: [a, b], targetNetSpending: 60000,
+    assumptions: { startYear: 2026, endAge: 95, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04, ...extra },
+  });
+  const at = (rows: ReturnType<typeof runProjection>, year: number) => rows.find((y) => y.year === year)!;
+
+  it("le montant saisi est celui de 65 ans : à 65 ans la rente est inchangée", () => {
+    const rows = runProjection(scen(person("A", 1961, 65, 65), person("B", 1961, 65, 65)), tax);   // 65 ans en 2026
+    expect(at(rows, 2026).spouses[0].rrqIncome).toBeCloseTo(14000, 6);
+    expect(at(rows, 2030).spouses[0].rrqIncome).toBeCloseTo(14000 * Math.pow(1.02, 4), 6);
+    expect(at(rows, 2026).spouses[0].psvIncome).toBeCloseTo(8700, 6);
+  });
+  it("RRQ à 60 ans : réduite de 30 % à 36 % selon le montant, et rien avant", () => {
+    const rows = runProjection(scen(person("A", 1971, 60, 65), person("B", 1971, 65, 65)), tax);   // 60 ans en 2031
+    expect(at(rows, 2030).spouses[0].rrqIncome).toBe(0);
+    const f = rrqFactor(60, 14000, tax.rrqMaxAt65);
+    expect(f).toBeGreaterThan(0.64);
+    expect(f).toBeLessThan(0.7);
+    expect(at(rows, 2031).spouses[0].rrqIncome).toBeCloseTo(14000 * f * Math.pow(1.02, 5), 6);
+  });
+  it("RRQ à 72 ans et PSV à 70 ans : bonifiées à vie, puis indexées", () => {
+    const rows = runProjection(scen(person("A", 1956, 72, 70), person("B", 1956, 65, 65)), tax);    // 70 ans en 2026, 72 ans en 2028
+    expect(at(rows, 2027).spouses[0].rrqIncome).toBe(0);
+    expect(at(rows, 2028).spouses[0].rrqIncome).toBeCloseTo(14000 * 1.588 * Math.pow(1.02, 2), 6);
+    expect(at(rows, 2026).spouses[0].psvIncome).toBeCloseTo(8700 * 1.36, 6);
+    expect(at(rows, 2031).spouses[0].psvIncome).toBeCloseTo(8700 * 1.36 * Math.pow(1.02, 5), 6);
+  });
+  it("la rente de survivant de la RRQ se calcule sur la rente ajustée du défunt", () => {
+    // A (RRQ à 70 ans, +42 %) décède à 75 ans, fin 2035; B a sa propre RRQ à 65 ans. Plafond du survivant très élevé.
+    const a = person("A", 1960, 70, 65, { deathAge: 75 }), b = person("B", 1960, 65, 65);
+    b.rrq = { annualAmount: 10000, startAge: 65 };
+    const rows = runProjection(scen(a, b, { rrqSurvivorCap: 1e9 }), tax);
+    const own = 10000 * Math.pow(1.02, 10);
+    const deceasedAdjusted = 14000 * 1.42 * Math.pow(1.02, 10);
+    expect(at(rows, 2036).spouses[1].rrqIncome).toBeCloseTo(own + 0.6 * deceasedAdjusted, 6);
+    expect(at(rows, 2036).spouses[0].rrqIncome).toBe(0);
+  });
+  it("reporter la RRQ réduit les revenus des premières années et augmente ceux d'après", () => {
+    const tôt = runProjection(scen(person("A", 1961, 65, 65), person("B", 1961, 65, 65)), tax);
+    const tard = runProjection(scen(person("A", 1961, 70, 65), person("B", 1961, 65, 65)), tax);
+    expect(at(tard, 2028).spouses[0].rrqIncome).toBe(0);
+    expect(at(tôt, 2028).spouses[0].rrqIncome).toBeGreaterThan(0);
+    expect(at(tard, 2040).spouses[0].rrqIncome).toBeCloseTo(at(tôt, 2040).spouses[0].rrqIncome * 1.42, 6);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("optimisation de l'âge de début de la RRQ et de la PSV", () => {
+  type Sp = Scenario["spouses"][0];
+  const person = (name: string, birthYear: number, o: { rrq?: number; psv?: number; reer?: number; celi?: number; db?: boolean } = {}): Sp => ({
+    name, birthYear,
+    dbPensions: o.db === false ? [] : [{ label: "RPA", annualAmount: 30000, startAge: 60, indexation: 0.02, survivorPct: 0.6 }],
+    rrq: { annualAmount: 12000, startAge: o.rrq ?? 65 }, psv: { annualAmount: 8700, startAge: o.psv ?? 65 },
+    reer: o.reer ?? 400000, celi: o.celi ?? 60000, celiRoom: 30000,
+  });
+  const couple = (a: Sp, b: Sp, endAge = 85, spending = 80000): Scenario => ({
+    spouses: [a, b], targetNetSpending: spending,
+    assumptions: { startYear: 2026, endAge, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 },
+  });
+  const onlyA: FreeChoices = { rrq: [true, false], psv: [true, false] };     // seulement le conjoint 1 : 11 x 6 = 66 combinaisons
+  const range = (lo: number, hi: number) => Array.from({ length: hi - lo + 1 }, (_, k) => lo + k);
+
+  // ---- âges possibles
+  it("explore chaque âge entre l'âge actuel et l'âge maximum de chaque rente", () => {
+    const r = benefitRanges(couple(person("A", 1964), person("B", 1962)), ALL_FREE);      // 62 ans et 64 ans en 2026
+    expect(r.rrq[0]).toEqual(range(62, 72));
+    expect(r.rrq[1]).toEqual(range(64, 72));
+    expect(r.psv[0]).toEqual(range(65, 70));
+    expect(r.psv[1]).toEqual(range(65, 70));
+    expect(countChoices(r)).toBe(11 * 6 * 9 * 6);
+  });
+  it("la RRQ commence au plus tôt à 60 ans et la PSV à 65 ans, même pour une personne plus jeune", () => {
+    const r = benefitRanges(couple(person("A", 1976), person("B", 1980)));        // 50 ans et 46 ans
+    expect(r.rrq[0]).toEqual(range(60, 72));
+    expect(r.psv[0]).toEqual(range(65, 70));
+    expect(countChoices(r)).toBe(13 * 6 * 13 * 6);
+  });
+  it("une rente déjà commencée (âge de début passé) n'a qu'un choix : son âge actuel", () => {
+    const r = benefitRanges(couple(person("A", 1955, { rrq: 62, psv: 65 }), person("B", 1962)));     // A a 71 ans
+    expect(r.rrq[0]).toEqual([62]);
+    expect(r.psv[0]).toEqual([65]);
+    expect(r.rrq[1]).toEqual(range(64, 72));
+  });
+  it("une rente qui commence cette année peut encore être reportée", () => {
+    const r = benefitRanges(couple(person("A", 1961, { rrq: 65 }), person("B", 1962)));      // A a 65 ans : la RRQ peut commencer maintenant
+    expect(r.rrq[0]).toEqual(range(65, 72));
+  });
+  it("une décision décochée garde l'âge du scénario", () => {
+    const r = benefitRanges(couple(person("A", 1964, { rrq: 66, psv: 67 }), person("B", 1962)), { rrq: [false, true], psv: [false, false] });
+    expect(r.rrq[0]).toEqual([66]);
+    expect(r.psv[0]).toEqual([67]);
+    expect(r.psv[1]).toEqual([65]);
+    expect(r.rrq[1]).toEqual(range(64, 72));
+  });
+  it("les âges ne dépassent pas l'âge du conjoint à la fin du plan, mais l'âge actuel du scénario est toujours conservé", () => {
+    const s = couple(person("A", 1962, { rrq: 70 }), person("B", 1962), 66);                // le plan finit quand ils ont 66 ans
+    expect(ageAtPlanEnd(s, 0)).toBe(66);
+    const r = benefitRanges(s);
+    expect(r.rrq[0]).toEqual([64, 65, 66, 70]);
+    expect(r.psv[0]).toEqual([65, 66]);
+  });
+  it("l'âge de fin du plan se calcule à partir du conjoint le plus jeune", () => {
+    const s = couple(person("A", 1960), person("B", 1966), 90);         // le plus jeune (1966) a 90 ans en 2056; A a alors 96 ans
+    expect(ageAtPlanEnd(s, 1)).toBe(90);
+    expect(ageAtPlanEnd(s, 0)).toBe(96);
+  });
+
+  // ---- combinaisons
+  it("énumère le produit des âges possibles, sans doublon, et inclut les choix actuels", () => {
+    const s = couple(person("A", 1964), person("B", 1962));
+    const r = benefitRanges(s, onlyA);
+    const all = enumerateChoices(r);
+    expect(all.length).toBe(countChoices(r));
+    expect(all.length).toBe(11 * 6);
+    expect(new Set(all.map(choiceKey)).size).toBe(all.length);
+    expect(all.map(choiceKey)).toContain(choiceKey(currentChoice(s)));
+    for (const c of all) { expect(c.rrq[1]).toBe(65); expect(c.psv[1]).toBe(65); }
+  });
+  it("applyChoice remplace les âges de début sans modifier le scénario d'origine", () => {
+    const s = couple(person("A", 1964), person("B", 1962));
+    const before = JSON.stringify(s);
+    const t = applyChoice(s, { rrq: [70, 68], psv: [66, 69] });
+    expect([t.spouses[0].rrq.startAge, t.spouses[1].rrq.startAge, t.spouses[0].psv.startAge, t.spouses[1].psv.startAge]).toEqual([70, 68, 66, 69]);
+    expect(t.spouses[0].rrq.annualAmount).toBe(12000);
+    expect(JSON.stringify(s)).toBe(before);
+  });
+
+  // ---- évaluation et classement
+  it("évaluer une combinaison donne le même résultat qu'un calcul direct du plan modifié", () => {
+    const s = couple(person("A", 1964), person("B", 1962));
+    const c = { rrq: [68, 65] as [number, number], psv: [67, 65] as [number, number] };
+    const r = evaluateChoice(s, tax, c);
+    const direct = summarize("", { kind: "reer-first" }, runProjection(applyChoice(s, c), tax), s.assumptions);
+    expect(r.afterTaxEstate).toBeCloseTo(direct.afterTaxEstate, 6);
+    expect(r.nominal.afterTaxEstate).toBeCloseTo(direct.nominal.afterTaxEstate, 6);
+    expect(r.nominal.afterTaxEstate).toBeGreaterThan(r.afterTaxEstate);      // dollars courants > dollars constants
+    expect(r.key).toBe("68-67|65-65");
+  });
+  it("les résultats ne dépendent pas de la façon de découper le calcul en lots", () => {
+    const s = couple(person("A", 1964), person("B", 1962), 80);
+    const choices = enumerateChoices(benefitRanges(s, { rrq: [true, false], psv: [false, false] }));         // 11 combinaisons
+    const whole = evaluateChoices(s, tax, choices);
+    const chunks = [choices.slice(0, 4), choices.slice(4, 5), choices.slice(5)].flatMap((c) => evaluateChoices(s, tax, c));
+    expect(JSON.stringify(chunks)).toBe(JSON.stringify(whole));
+  });
+  const fake = (key: string, estate: number, shortfall: number, tax = 0): ChoiceResult => ({
+    choice: { rrq: [65, 65], psv: [65, 65] }, key, afterTaxEstate: estate, totalShortfall: shortfall, yearsWithShortfall: shortfall > 0 ? 1 : 0, totalTax: tax, totalClawback: 0,
+    nominal: { afterTaxEstate: estate, totalShortfall: shortfall, totalTax: tax, totalClawback: 0 },
+  });
+  it("classement : les combinaisons qui financent tout d'abord, par succession décroissante", () => {
+    const list = [fake("a", 500, 0), fake("b", 900, 5000), fake("c", 700, 0), fake("d", 100, 0)];
+    expect([...list].sort(compareResults).map((r) => r.key)).toEqual(["c", "a", "d", "b"]);
+  });
+  it("classement : si aucune ne finance tout, par manque cumulé croissant", () => {
+    const list = [fake("a", 0, 9000), fake("b", 50, 3000), fake("c", 10, 3000), fake("d", 0, 500)];
+    expect([...list].sort(compareResults).map((r) => r.key)).toEqual(["d", "b", "c", "a"]);
+  });
+  it("un manque de 100 $ ou moins est négligé (même seuil que pour les stratégies)", () => {
+    expect(isFeasible(fake("a", 1, 100))).toBe(true);
+    expect(isFeasible(fake("b", 1, 100.01))).toBe(false);
+    expect([fake("x", 100, 100.5), fake("y", 50, 100)].sort(compareResults)[0].key).toBe("y");
+  });
+  it("à succession égale, l'impôt le plus bas passe devant, puis l'ordre des clés rend le classement stable", () => {
+    const list = [fake("b", 1000, 0, 300), fake("a", 1000, 0, 500), fake("c", 1000, 0, 300)];
+    expect([...list].sort(compareResults).map((r) => r.key)).toEqual(["b", "c", "a"]);
+  });
+  it("rankResults repère les choix actuels et leur rang, et refuse des résultats qui ne les contiennent pas", () => {
+    const s = couple(person("A", 1964), person("B", 1962));
+    const mine = choiceKey(currentChoice(s));
+    const res = rankResults(s, [fake("zz", 900, 0), { ...fake(mine, 400, 0) }, fake("yy", 700, 0)]);
+    expect(res.ranked.map((r) => r.key)).toEqual(["zz", "yy", mine]);
+    expect(res.currentRank).toBe(3);
+    expect(res.best.key).toBe("zz");
+    expect(res.total).toBe(3);
+    expect(res.anyFeasible).toBe(true);
+    expect(() => rankResults(s, [fake("zz", 900, 0)])).toThrow();
+  });
+
+  // ---- optimisation complète
+  it("la meilleure combinaison est première, au moins aussi bonne que toutes les autres et que les choix actuels", () => {
+    const s = couple(person("A", 1964), person("B", 1962), 85);
+    const res = optimizeBenefits(s, tax, {}, onlyA);
+    expect(res.total).toBe(66);
+    expect(new Set(res.ranked.map((r) => r.key)).size).toBe(66);
+    expect(res.best).toBe(res.ranked[0]);
+    for (const r of res.ranked) expect(res.best.afterTaxEstate).toBeGreaterThanOrEqual(r.afterTaxEstate - 1e-6);
+    expect(res.best.afterTaxEstate).toBeGreaterThanOrEqual(res.current.afterTaxEstate);
+    expect(res.current.key).toBe(choiceKey(currentChoice(s)));
+    expect(res.ranked[res.currentRank - 1]).toBe(res.current);
+    expect(res.anyFeasible).toBe(true);
+  });
+  it("appliquer la meilleure combinaison et recalculer le plan redonne exactement sa succession", () => {
+    const s = couple(person("A", 1964), person("B", 1962), 80);
+    const res = optimizeBenefits(s, tax, {}, { rrq: [true, false], psv: [false, false] });
+    const t = applyChoice(s, res.best.choice);
+    const direct = summarize("", { kind: "reer-first" }, runProjection(t, tax), t.assumptions);
+    expect(direct.afterTaxEstate).toBeCloseTo(res.best.afterTaxEstate, 6);
+    expect(optimizeBenefits(t, tax, {}, { rrq: [true, false], psv: [false, false] }).currentRank).toBe(1);      // après application, ce sont les choix actuels les meilleurs
+  });
+  it("plus le plan est long, plus l'âge optimal de début de la RRQ est tardif", () => {
+    const best = (endAge: number) => optimizeBenefits(couple(person("A", 1964), person("B", 1962), endAge), tax, {}, { rrq: [true, false], psv: [false, false] }).best.choice.rrq[0];
+    const [court, moyen, long] = [best(72), best(85), best(100)];
+    expect(court).toBe(62);                 // un plan qui s'arrête à 72 ans : mieux vaut commencer tout de suite
+    expect(long).toBe(72);                  // un plan jusqu'à 100 ans : mieux vaut reporter au maximum
+    expect(moyen).toBeGreaterThan(court);
+    expect(moyen).toBeLessThan(long);
+  });
+  it("quand seules certaines combinaisons financent les dépenses, la meilleure en fait partie et les autres manquent", () => {
+    // Peu d'actifs : reporter la rente laisse des années sans revenus suffisants.
+    const poor = (o = {}) => person("A", 1964, { db: false, reer: 20000, celi: 0, ...o });
+    const s = couple(poor(), { ...poor(), name: "B", birthYear: 1962 }, 80, 34000);
+    const res = optimizeBenefits(s, tax, {}, onlyA);
+    const feasible = res.ranked.filter(isFeasible);
+    expect(feasible.length).toBeGreaterThan(0);
+    expect(feasible.length).toBeLessThan(res.total);
+    expect(isFeasible(res.best)).toBe(true);
+    expect(res.anyFeasible).toBe(true);
+    res.ranked.slice(0, feasible.length).forEach((r) => expect(isFeasible(r)).toBe(true));        // les faisables sont toutes devant
+    res.ranked.slice(feasible.length).forEach((r) => expect(r.totalShortfall).toBeGreaterThan(100));
+    for (let k = 1; k < feasible.length; k++) expect(feasible[k - 1].afterTaxEstate).toBeGreaterThanOrEqual(feasible[k].afterTaxEstate - 1e-6);
+  });
+  it("quand aucune combinaison ne finance tout, la meilleure est celle qui manque le moins", () => {
+    const poor = (o = {}) => person("A", 1964, { db: false, reer: 20000, celi: 0, ...o });
+    const s = couple(poor(), { ...poor(), name: "B", birthYear: 1962 }, 80, 40000);
+    const res = optimizeBenefits(s, tax, {}, onlyA);
+    expect(res.anyFeasible).toBe(false);
+    expect(res.ranked.every((r) => !isFeasible(r))).toBe(true);
+    const least = Math.min(...res.ranked.map((r) => r.totalShortfall));
+    expect(res.best.totalShortfall).toBeCloseTo(least, 6);
+    for (let k = 1; k < res.ranked.length; k++) expect(res.ranked[k - 1].totalShortfall).toBeLessThanOrEqual(res.ranked[k].totalShortfall + 1e-6);
+    expect(res.best.totalShortfall).toBeLessThan(res.ranked[res.ranked.length - 1].totalShortfall);
+  });
+  it("tient compte d'un décès saisi dans le scénario", () => {
+    // A décède à 66 ans : reporter sa propre RRQ jusqu'à 72 ans n'a aucun intérêt pour lui; l'optimisation doit le voir.
+    const s = couple({ ...person("A", 1964), deathAge: 66 }, person("B", 1962), 85);
+    const res = optimizeBenefits(s, tax, {}, { rrq: [true, false], psv: [true, false] });
+    expect(res.best.choice.rrq[0]).toBeLessThan(72);
+    expect(res.best.choice.psv[0]).toBe(65);
   });
 });
