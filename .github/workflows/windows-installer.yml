@@ -21,7 +21,7 @@ jobs:
       # Pour signer : ajouter les secrets CSC_LINK et CSC_KEY_PASSWORD (voir docs/PUBLICATION.md) et retirer cette ligne.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Vérifier que l'étiquette correspond à la version de package.json
         if: startsWith(github.ref, 'refs/tags/v')
@@ -33,9 +33,9 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
 
       - name: Installer les dépendances
@@ -60,7 +60,7 @@ jobs:
           Get-Content release/SHA256SUMS.txt
 
       - name: Conserver les fichiers produits
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: decumulation-windows
           path: |
@@ -78,7 +78,7 @@ jobs:
     permissions:
       contents: write     # nécessaire pour créer la version et y joindre les fichiers
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: decumulation-windows
           path: release
@@ -103,12 +103,12 @@ jobs:
       id-token: write     # authentification à AWS par OIDC, sans clé d'accès enregistrée
       contents: read
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: decumulation-windows
           path: release
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}

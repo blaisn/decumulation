@@ -7,6 +7,8 @@ Nom du projet : `decumulation` (paquet npm, identifiant d'application `ca.local.
 **Données de l'application** : sous Windows, dans `%APPDATA%\Decumulation` (dossier fixé dans `electron/main.ts`, le même avec `npm run start` et avec une version installée ou portable). Elles comprennent le formulaire, les données de base et le choix de l'unité des montants. Pour une vraie sauvegarde, ou pour changer d'ordinateur, utilisez « Enregistrer » : le fichier JSON contient le formulaire et les données de base.
 
 ## Démarrer
+Nécessite **Node.js 24** (version LTS) : `package.json` l'exige (`engines`), et la CI utilise la même.
+
     npm install
     npm test             # moteur de calcul et interface (fonctions pures)
     npm run start        # construit l'application et l'ouvre dans Electron

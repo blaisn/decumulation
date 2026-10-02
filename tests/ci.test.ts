@@ -101,3 +101,42 @@ describe("publication Windows (MSI, version GitHub, S3)", () => {
     for (const u of uses) expect(/^(actions|aws-actions)\//.test(u)).toBe(true);
   });
 });
+
+describe("Node 24 : actions GitHub et version du projet", () => {
+  const files = readdirSync(".github/workflows").filter((f) => /\.ya?ml$/.test(f)).map((f) => `.github/workflows/${f}`);
+  const texts = files.map((f) => ({ f, t: readFileSync(f, "utf8") }));
+  const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { engines?: { node?: string }; devDependencies: Record<string, string> };
+
+  // Première version majeure de chaque action qui tourne sur Node 24 (Node 20 n'est plus offert par GitHub Actions depuis le 23 septembre 2026).
+  const FIRST_NODE24: Record<string, number> = {
+    "actions/checkout": 5,
+    "actions/setup-node": 5,
+    "actions/upload-artifact": 6,
+    "actions/download-artifact": 7,
+    "aws-actions/configure-aws-credentials": 6,
+  };
+
+  it("chaque action utilisée est une version qui tourne sur Node 24", () => {
+    let vues = 0;
+    for (const { f, t } of texts) for (const m of t.matchAll(/uses:\s*([\w.-]+\/[\w.-]+)@v(\d+)/g)) {
+      const min = FIRST_NODE24[m[1]];
+      expect(min !== undefined).toBe(true);              // une nouvelle action doit être ajoutée à la liste ci-dessus, après vérification
+      expect(Number(m[2])).toBeGreaterThanOrEqual(min);
+      vues++;
+    }
+    expect(vues).toBeGreaterThanOrEqual(8);
+  });
+  it("toutes les actions sont référencées par une version majeure explicite (@vN)", () => {
+    for (const { t } of texts) for (const m of t.matchAll(/uses:\s*(\S+)/g)) expect(/@v\d+$/.test(m[1])).toBe(true);
+  });
+  it("les workflows utilisent la même version de Node que celle exigée par package.json (engines)", () => {
+    const required = /(\d+)/.exec(pkg.engines?.node ?? "")?.[1];
+    expect(required).toBe("24");
+    let vus = 0;
+    for (const { t } of texts) for (const m of t.matchAll(/node-version:\s*(\d+)/g)) { expect(m[1]).toBe(required); vus++; }
+    expect(vus).toBeGreaterThanOrEqual(2);
+  });
+  it("les types de Node correspondent à la version de Node utilisée", () => {
+    expect(/^\^?24\./.test(pkg.devDependencies["@types/node"])).toBe(true);
+  });
+});
