@@ -140,3 +140,13 @@ describe("Node 24 : actions GitHub et version du projet", () => {
     expect(/^\^?24\./.test(pkg.devDependencies["@types/node"])).toBe(true);
   });
 });
+
+describe("dépannage de la construction sous Windows", () => {
+  const doc = readFileSync("docs/PUBLICATION.md", "utf8");
+  it("la documentation explique l'erreur « Cannot create symbolic link » (winCodeSign), sa cause et ses solutions", () => {
+    for (const part of ["Cannot create symbolic link", "winCodeSign", "mode développeur", "rm -rf \"$LOCALAPPDATA/electron-builder/Cache/winCodeSign\"", "Remove-Item", "Run workflow"]) expect(doc.includes(part)).toBe(true);
+  });
+  it("le README renvoie vers ce dépannage", () => {
+    expect(readFileSync("README.md", "utf8").includes("Cannot create symbolic link")).toBe(true);
+  });
+});
