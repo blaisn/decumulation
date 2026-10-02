@@ -151,6 +151,7 @@ export interface SpouseYear {
   nonRegBalanceEnd: number;
   propertyProceeds: number; // part de ce conjoint dans le produit de la vente d'immeubles de l'année, en dollars courants (argent non imposable)
   taxableCapitalGain: number; // gain en capital imposable ajouté à son revenu (après le taux d'inclusion); 0 pour une résidence principale
+  shortfall: number; // part de ce conjoint dans le manque du ménage, selon sa part des dépenses (la somme des deux est le manque du ménage)
   spending: number; // part de ce conjoint dans la dépense visée du ménage, en dollars courants (0 si décédé)
   spendingShare: number; // cette part en fraction de la dépense du ménage (1 pour le survivant, 0 si décédé)
   marginalRate: number; // taux marginal combiné (fédéral après abattement du Québec + Québec) du palier du revenu imposable; 0 si décédé

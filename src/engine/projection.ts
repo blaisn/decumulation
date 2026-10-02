@@ -222,7 +222,7 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
       reerBalanceEnd: bal[i].reer, celiBalanceEnd: bal[i].celi,
       nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
       propertyProceeds: proceeds[i], taxableCapitalGain: gainIncome[i],
-      spending: target * shares[i], spendingShare: shares[i],
+      spending: target * shares[i], spendingShare: shares[i], shortfall: celiNeed * shares[i],
       marginalRate: alive[i] ? r.marginal[i] : 0,
     })) as [SpouseYear, SpouseYear];
 

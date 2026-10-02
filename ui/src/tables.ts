@@ -21,17 +21,19 @@ export function yearTable(s: Scenario, rows: YearResult[], real: boolean, expand
   const col = (label: string, pick: (p: Sp) => number): Col => ({ label, total: (y) => d(y.year, sum(y, pick)), spouse: (y, p) => d(y.year, pick(p)) });
   const columns: Col[] = [
     col("Rentes de régimes", (p) => p.pensionIncome), col("RRQ", (p) => p.rrqIncome), col("PSV", (p) => p.psvIncome),
-    col("Retraits REER/FERR", (p) => p.reerWithdrawal), col("Retraits CELI et non enr.", (p) => p.celiWithdrawal + p.nonRegWithdrawal),
+    col("Retraits REER/FERR", (p) => p.reerWithdrawal), col("Retraits CELI", (p) => p.celiWithdrawal), col("Retraits non enr.", (p) => p.nonRegWithdrawal),
     ...(sales ? [col("Vente d'immeubles", (p) => p.propertyProceeds), col("Gain en capital imposable", (p) => p.taxableCapitalGain)] : []),
-    col("Impôt", (p) => p.tax), col("PSV récupérée", (p) => p.psvClawback),
+    col("Cotisation CELI", (p) => p.celiContribution), col("Cotisation non enr.", (p) => p.nonRegContribution),
+    // De la récupération de la PSV à l'impôt, dans l'ordre du calcul : récupération et fractionnement, revenu imposable, taux marginal, impôt.
+    col("PSV récupérée", (p) => p.psvClawback),
     // Ménage : montant transféré; conjoint : signé, comme dans le CSV (+ reçu, − cédé).
     { label: "Pension fractionnée", total: (y) => d(y.year, Math.max(y.spouses[0].pensionSplit, y.spouses[1].pensionSplit)), spouse: (y, p) => d(y.year, p.pensionSplit) },
     col("Revenu imposable", (p) => p.taxableIncome),
     // Le taux marginal est propre à chaque personne : rien pour le ménage.
     { label: "Taux marginal", total: () => "", spouse: (_y, p) => fmtPct(p.marginalRate) },
-    // Conjoint : sa part de la dépense visée. Le manque se calcule pour le ménage seulement.
-    { label: "Dépenses visées", total: (y) => d(y.year, y.targetSpending), spouse: (y, p) => d(y.year, p.spending) },
-    { label: "Manque", total: (y) => d(y.year, y.shortfall), spouse: () => "" },
+    col("Impôt", (p) => p.tax),
+    // Conjoint : sa part de la dépense visée et du manque (réparti selon cette part).
+    col("Dépenses visées", (p) => p.spending), col("Manque", (p) => p.shortfall),
     col("Solde REER/FERR", (p) => p.reerBalanceEnd), col("Solde CELI", (p) => p.celiBalanceEnd), col("Solde non enr.", (p) => p.nonRegBalanceEnd),
   ];
   const cell = (c: string | number) => `<td>${typeof c === "number" ? fmtNum(c) : esc(c)}</td>`;

@@ -1119,3 +1119,47 @@ describe("immeubles : vente, gain en capital et résidence principale", () => {
     expect(dead.properties?.length).toBe(1);
   });
 });
+
+describe("manque par conjoint", () => {
+  const person = (name: string, birthYear: number, deathAge?: number) => ({
+    name, birthYear, deathAge,
+    dbPensions: [{ label: "RPA", annualAmount: 40000, startAge: 62, indexation: 0.02, survivorPct: 0.6 }],
+    rrq: { annualAmount: 14000, startAge: 65 }, psv: { annualAmount: 8700, startAge: 65 }, reer: 300000, celi: 40000, celiRoom: 40000,
+  });
+  const mk = (share: number, deathA?: number): Scenario => ({
+    spouses: [person("A", 1960, deathA), person("B", 1962)], targetNetSpending: 160000, firstSpouseSpendingShare: share,
+    assumptions: { startYear: 2026, endAge: 95, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 },
+  });
+
+  it("le manque du ménage est réparti selon la part des dépenses, et la somme des deux parts est le manque du ménage", () => {
+    const rows = runProjection(mk(0.7), tax);
+    const short = rows.filter((y) => y.shortfall > 1);
+    expect(short.length).toBeGreaterThan(5);
+    for (const y of rows) {
+      expect(y.spouses[0].shortfall + y.spouses[1].shortfall).toBeCloseTo(y.shortfall, 6);
+      expect(y.spouses[0].shortfall).toBeCloseTo(y.shortfall * y.spouses[0].spendingShare, 6);
+    }
+    for (const y of short) {
+      expect(y.spouses[0].shortfall).toBeCloseTo(0.7 * y.shortfall, 6);
+      expect(y.spouses[1].shortfall).toBeCloseTo(0.3 * y.shortfall, 6);
+    }
+  });
+  it("sans manque, les deux parts sont nulles", () => {
+    const rows = runProjection({ ...mk(0.5), targetNetSpending: 60000 }, tax);
+    expect(rows.every((y) => y.shortfall < 1)).toBe(true);
+    expect(rows.every((y) => y.spouses[0].shortfall === 0 && y.spouses[1].shortfall === 0)).toBe(true);
+  });
+  it("après un décès, tout le manque revient au survivant et le défunt n'en a aucun", () => {
+    const rows = runProjection(mk(0.7, 70), tax);        // A décède fin 2030
+    const after = rows.filter((y) => y.year > 2030 && y.shortfall > 1);
+    expect(after.length).toBeGreaterThan(3);
+    for (const y of after) {
+      expect(y.spouses[0].shortfall).toBe(0);
+      expect(y.spouses[1].shortfall).toBeCloseTo(y.shortfall, 6);
+    }
+  });
+  it("la répartition ne change pas le manque du ménage", () => {
+    const a = runProjection(mk(0.5), tax), b = runProjection(mk(0.9), tax);
+    expect(a.map((y) => y.shortfall)).toEqual(b.map((y) => y.shortfall));
+  });
+});
