@@ -38,6 +38,34 @@ Sous Windows seulement (le MSI exige l'outil WiX, qu'electron-builder téléchar
 
 Les fichiers sont dans `release/`.
 
+### Dépannage : « Cannot create symbolic link » pendant `npm run dist`
+
+Sous Windows, la construction s'arrête avec, répété quatre fois (reprises automatiques) :
+
+    ERROR: Cannot create symbolic link : Le client ne dispose pas d'un privilège nécessaire. : ...\winCodeSign\...\libcrypto.dylib
+
+**Cause.** electron-builder télécharge un outil (winCodeSign) dont l'archive contient des liens symboliques prévus pour macOS. Windows ne laisse créer des liens symboliques qu'aux administrateurs, ou quand le *mode développeur* est activé. Ce n'est pas une erreur du projet. C'est un défaut connu d'electron-builder (n° 8149), corrigé en février 2026 dans une version plus récente que celle du projet (25.x).
+
+**Solution, dans l'ordre :**
+
+1. Activer le **mode développeur** : Paramètres > Système > Espace développeurs > Mode développeur (ou chercher « mode développeur » dans les paramètres). Fermer puis rouvrir VS Code.
+2. Supprimer l'archive partielle laissée par les essais ratés :
+
+        # Git Bash
+        rm -rf "$LOCALAPPDATA/electron-builder/Cache/winCodeSign"
+
+        # PowerShell
+        Remove-Item "$env:LOCALAPPDATA\electron-builder\Cache\winCodeSign" -Recurse -Force
+
+3. Relancer `npm run dist`. L'outil est extrait une seule fois, puis gardé en cache.
+
+**Sans mode développeur :** lancer le terminal *en tant qu'administrateur*, ou faire construire les fichiers par GitHub (Actions > Installateur Windows > Run workflow) : les machines de GitHub ont ce droit, et les fichiers se téléchargent dans les artefacts.
+
+**Avertissements sans gravité** qui s'affichent aussi :
+
+- `author is missed in the package.json` : ajouter `"author": "Votre nom"` dans `package.json`. C'est le nom de l'éditeur que montrent l'installateur et le MSI.
+- `default Electron icon is used` : l'application n'a pas d'icône. Déposer un fichier `build/icon.ico` (au moins 256 × 256 pixels) pour remplacer l'icône d'Electron.
+
 ## 4. Avertissement SmartScreen et signature de code
 
 Les fichiers ne sont pas signés. Au premier lancement, Windows affiche « Windows a protégé votre ordinateur » : cliquer sur « Informations complémentaires », puis « Exécuter quand même ». Un MSI non signé affiche « Éditeur inconnu ».

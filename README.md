@@ -15,7 +15,7 @@ Nécessite **Node.js 24** (version LTS) : `package.json` l'exige (`engines`), et
     npm run dist         # crée l'installateur et la version portable Windows dans release/
     npm run example      # compare les stratégies de retrait sur un couple fictif (console)
 
-`npm run dist` doit être lancé sous Windows pour produire les .exe (ou déclenché sur GitHub : voir « Versionnage et intégration continue ») (installateur NSIS et version portable). Sans icône ni signature de code, Windows affichera un avertissement SmartScreen au premier lancement.
+`npm run dist` doit être lancé sous Windows pour produire les .exe (ou déclenché sur GitHub : voir « Versionnage et intégration continue »). Si l'erreur « Cannot create symbolic link » apparaît, voir le dépannage dans [docs/PUBLICATION.md](docs/PUBLICATION.md) : il faut activer le mode développeur de Windows (installateur NSIS et version portable). Sans icône ni signature de code, Windows affichera un avertissement SmartScreen au premier lancement.
 
 **Publier une version** (MSI, installateur, version portable, version GitHub, copie sur S3, site web statique) : voir [docs/PUBLICATION.md](docs/PUBLICATION.md).
 
