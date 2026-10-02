@@ -1,4 +1,4 @@
-import type { Assumptions, DbPension, Scenario, SpouseInput, SpouseYear, Strategy, TaxYearTable, YearResult } from "./types";
+import type { Assumptions, DbPension, Property, Scenario, SpouseInput, SpouseYear, Strategy, TaxYearTable, YearResult } from "./types";
 import { householdTax, indexTable, optimizeSplit, type HouseholdTaxResult } from "./tax";
 import { psvAmount, rrqAmount } from "./benefits";
 import { ferrMinFactor } from "./ferr";
@@ -93,13 +93,34 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
       own.rrq = Math.max(own.rrq, Math.min(combined, cap));
       return own;
     });
+    // Vente d'immeubles : le produit est de l'argent non imposable, versé dans l'année; le gain en capital (net des pertes de
+    // l'année, par propriétaire) s'ajoute au revenu imposable, sauf pour une résidence principale. Au décès d'un propriétaire,
+    // sa part passe au survivant (roulement : pas d'impôt au décès).
+    const ownerShares = (p: Property): [number, number] => {
+      if (p.owner === "both") return both ? [0.5, 0.5] : [alive[0] ? 1 : 0, alive[1] ? 1 : 0];
+      const mine = alive[p.owner] ? p.owner : 1 - p.owner;
+      return mine === 0 ? [1, 0] : [0, 1];
+    };
+    const proceeds: [number, number] = [0, 0], netGain: [number, number] = [0, 0];
+    for (const p of s.properties ?? []) {
+      if (p.saleYear !== year || p.salePrice === undefined) continue;
+      const sh = ownerShares(p);
+      for (const i of [0, 1] as const) {
+        proceeds[i] += p.salePrice * sh[i];
+        if (!p.principalResidence) netGain[i] += (p.salePrice - p.purchasePrice) * sh[i];
+      }
+    }
+    const gainIncome: [number, number] = [Math.max(0, netGain[0]) * tax.capitalGainsInclusion, Math.max(0, netGain[1]) * tax.capitalGainsInclusion];
+    // Le revenu imposable compte la part imposable du gain, mais l'argent reçu est le produit de la vente.
+    const saleAdj = proceeds[0] + proceeds[1] - gainIncome[0] - gainIncome[1];
+
     const minW = bal.map((b, i) => (alive[i] && ages[i] >= 71 ? b.reer * ferrMinFactor(ages[i]) : 0));
     const caps: [number, number] = [bal[0].reer - minW[0], bal[1].reer - minW[1]];
 
     const evaluate = (extra: [number, number]): HouseholdTaxResult => {
       const tp = [0, 1].map((i) => ({
         age: ages[i], psv: g[i].psv,
-        income: g[i].db + g[i].rrq + g[i].psv + nrIncome[i] + minW[i] + extra[i],
+        income: g[i].db + g[i].rrq + g[i].psv + nrIncome[i] + minW[i] + extra[i] + gainIncome[i],
         eligiblePension: g[i].db + (ages[i] >= 65 ? minW[i] + extra[i] : 0),
       }));
       if (both) return a.pensionSplitting === false ? householdTax([tp[0], tp[1]], tax) : optimizeSplit([tp[0], tp[1]], tax);
@@ -109,7 +130,7 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
     };
     const netFor = (extra: [number, number]) => {
       const r = evaluate(extra);
-      return r.incomeAfterSplit[0] + r.incomeAfterSplit[1] - r.tax[0] - r.tax[1] - r.clawback[0] - r.clawback[1];
+      return r.incomeAfterSplit[0] + r.incomeAfterSplit[1] + saleAdj - r.tax[0] - r.tax[1] - r.clawback[0] - r.clawback[1];
     };
 
     // Financement de la dépense nette, palier par palier selon la stratégie.
@@ -118,7 +139,7 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
     type Tier = { kind: "celi" } | { kind: "nonreg" } | { kind: "reer"; caps: [number, number]; force?: boolean };
     const strategy: Strategy = s.strategy ?? { kind: "reer-first" };
     const ceilingOf = (c: number | "psv-threshold") => (c === "psv-threshold" ? tax.federal.psvClawback.threshold : c * infl);
-    const base = [0, 1].map((i) => g[i].db + g[i].rrq + g[i].psv + nrIncome[i] + minW[i]);
+    const base = [0, 1].map((i) => g[i].db + g[i].rrq + g[i].psv + nrIncome[i] + minW[i] + gainIncome[i]);
     const capsUpTo = (ceiling: number, ageLimit = Infinity): [number, number] => [0, 1].map((i) => (ages[i] <= ageLimit ? Math.min(caps[i], Math.max(0, ceiling - base[i])) : 0)) as [number, number];
     const rest = (first: [number, number]): [number, number] => [caps[0] - first[0], caps[1] - first[1]];
     let tiers: Tier[];
@@ -200,6 +221,7 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
       taxableIncome: r.incomeAfterSplit[i] - r.clawback[i], psvClawback: r.clawback[i], pensionSplit: r.splitAmount[i], tax: r.tax[i],
       reerBalanceEnd: bal[i].reer, celiBalanceEnd: bal[i].celi,
       nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
+      propertyProceeds: proceeds[i], taxableCapitalGain: gainIncome[i],
       spending: target * shares[i], spendingShare: shares[i],
       marginalRate: alive[i] ? r.marginal[i] : 0,
     })) as [SpouseYear, SpouseYear];

@@ -1,6 +1,6 @@
 import table2026 from "../../src/engine/data/tax-2026.json";
 import { psvFactor, rrqFactor } from "../../src/index";
-import type { BenefitChoice, CompareOptions, DbPension, Scenario, SpouseInput, Strategy } from "../../src/index";
+import type { BenefitChoice, CompareOptions, DbPension, Property, Scenario, SpouseInput, Strategy } from "../../src/index";
 import { fmtMoney } from "./format";
 
 // L'état du formulaire garde les valeurs telles que saisies (texte); la conversion se fait dans `toScenario`.
@@ -24,6 +24,16 @@ export interface AssumptionsForm {
   celiAnnualLimit: string; survivorSpendingRatio: string; rrqSurvivorCap: string;
   applySplitting: boolean; // fractionnement du revenu de pension (case à cocher)
 }
+/** Immeuble saisi dans le formulaire : tous les champs sont du texte, comme le reste du formulaire. */
+export interface PropertyForm {
+  label: string;
+  owner: "both" | "0" | "1"; // propriétaire : les deux conjoints ou le conjoint 1 / 2
+  principalResidence: boolean; // gain en capital exonéré d'impôt
+  purchaseYear: string; // avant le début du plan
+  purchasePrice: string; // prix d'achat (coût fiscal); facultatif tant qu'il n'y a pas de vente imposable
+  saleYear: string; // vide : pas de vente pendant le plan
+  salePrice: string; // en dollars courants de l'année de vente
+}
 export interface FormState {
   version: 1;
   spending: string;
@@ -31,6 +41,7 @@ export interface FormState {
   estateTaxRate: string;
   nonRegTaxRate: string;
   spouses: [SpouseForm, SpouseForm];
+  properties: PropertyForm[];
   strategy: StrategyForm;
 }
 
@@ -56,6 +67,7 @@ export function defaultForm(): FormState {
     estateTaxRate: "45",
     nonRegTaxRate: "10",
     spouses: [spouse("Alex", "1960", "45000", "50"), spouse("Sam", "1962", "25000")],
+    properties: [],
     strategy: { kind: "reer-first", ceiling: "90000", usePsvThreshold: true, untilAge: "" },
   };
 }
@@ -94,6 +106,47 @@ export function shareComplement(firstShare: string | undefined): string {
 }
 
 export function newPension(): PensionForm { return pension("", "0"); }
+
+/** Nouvel immeuble : acheté il y a 15 ans, sans vente (il n'a donc aucun effet sur le plan tant qu'on n'ajoute pas de vente). */
+export function newProperty(startYear = "2026"): PropertyForm {
+  const y = parseInt(startYear, 10);
+  return { label: "", owner: "both", principalResidence: false, purchaseYear: String(Number.isFinite(y) ? y - 15 : 2011), purchasePrice: "", saleYear: "", salePrice: "" };
+}
+
+/** Part imposable d'un gain en capital (table fiscale 2026). */
+export const CAPITAL_GAINS_INCLUSION = (table2026 as unknown as { capitalGainsInclusion: number }).capitalGainsInclusion;
+
+/** Nombre d'immeubles désignés « résidence principale » : une famille ne peut en désigner qu'une par année. */
+export const principalResidenceCount = (f: FormState) => f.properties.filter((p) => p.principalResidence).length;
+
+/**
+ * Aperçu d'un immeuble : prix de vente en dollars de départ, gain en capital et impôt, ou avertissement.
+ * Chaîne vide tant que les champs nécessaires ne sont pas valides.
+ */
+export function propertyHint(f: FormState, j: number): string {
+  const p = f.properties[j];
+  if (!p) return "";
+  if (p.saleYear.trim() === "") return "Sans année de vente, l'immeuble n'est pas vendu pendant le plan : il n'a aucun effet sur les calculs.";
+  const startYear = parseNumber(f.assumptions.startYear), inflation = parseNumber(f.assumptions.inflation) / 100;
+  const saleYear = parseNumber(p.saleYear), price = parseNumber(p.salePrice), cost = parseNumber(p.purchasePrice);
+  if (!Number.isInteger(saleYear) || !Number.isFinite(price) || price < 0) return "";
+  const parts: string[] = [];
+  if (Number.isFinite(startYear) && Number.isFinite(inflation) && saleYear >= startYear) {
+    parts.push(`prix de vente de ${fmtMoney(price / Math.pow(1 + inflation, saleYear - startYear))} en dollars de ${startYear}`);
+  }
+  if (p.principalResidence) parts.push("résidence principale : gain exonéré d'impôt");
+  else if (Number.isFinite(cost) && cost >= 0) {
+    const gain = price - cost;
+    parts.push(gain > 0 ? `gain en capital de ${fmtMoney(gain)}, dont ${fmtMoney(gain * CAPITAL_GAINS_INCLUSION)} imposables` : gain < 0 ? `perte en capital de ${fmtMoney(-gain)} (sans effet sur l'impôt)` : "aucun gain en capital");
+  }
+  let text = parts.length ? parts.join("; ").replace(/^./, (c) => c.toUpperCase()) + "." : "";
+  const births = f.spouses.map((s) => parseNumber(s.birthYear)), endAge = parseNumber(f.assumptions.endAge);
+  if (births.every(Number.isFinite) && Number.isFinite(endAge)) {
+    const lastYear = Math.max(...births) + endAge;
+    if (saleYear > lastYear) text += `${text ? " " : ""}Cette vente a lieu après la fin du plan (${lastYear}) : elle n'a aucun effet.`;
+  }
+  return text;
+}
 
 export function parseNumber(s: string): number {
   const t = String(s).replace(/[\s\u00a0\u202f$%]/g, "").replace(",", ".");
@@ -160,6 +213,28 @@ export function toScenario(f: FormState): Parsed {
     };
   }) as [SpouseInput, SpouseInput];
 
+  // Immeubles : achetés avant le début du plan (l'achat pendant le plan n'est pas encore pris en charge), sans hypothèque.
+  const properties = f.properties.map((p, j): Property => {
+    const name = p.label.trim() || `Immeuble ${j + 1}`;
+    const L = (x: string) => `Immeuble ${j + 1}${p.label.trim() ? ` (${p.label.trim()})` : ""} : ${x}`;
+    const hasSale = p.saleYear.trim() !== "";
+    const purchaseYear = need(L("année d'achat"), p.purchaseYear, { int: true, min: 1800, max: 2200 });
+    if (p.purchaseYear.trim() !== "" && Number.isFinite(purchaseYear) && startYear > 0 && purchaseYear >= startYear) {
+      errors.push(L(`année d'achat ${purchaseYear} : elle doit précéder le début du plan (${startYear}). L'achat d'un immeuble pendant le plan n'est pas encore pris en charge.`));
+    }
+    const saleYear = need(L("année de vente"), p.saleYear, { int: true, min: 1800, max: 2200, optional: true });
+    if (hasSale && Number.isFinite(saleYear) && startYear > 0 && saleYear < startYear) errors.push(L(`année de vente ${saleYear} : elle doit être à partir du début du plan (${startYear}).`));
+    // Le prix de vente est obligatoire s'il y a une vente; le prix d'achat aussi, sauf pour une résidence principale (gain exonéré).
+    const salePrice = need(L("prix de vente"), p.salePrice, { min: 0, optional: !hasSale });
+    const purchasePrice = need(L("prix d'achat"), p.purchasePrice, { min: 0, optional: !hasSale || p.principalResidence });
+    return {
+      label: name, owner: p.owner === "0" ? 0 : p.owner === "1" ? 1 : "both", purchaseYear,
+      purchasePrice: Number.isFinite(purchasePrice) ? purchasePrice : 0,
+      ...(hasSale ? { saleYear, salePrice } : {}),
+      principalResidence: p.principalResidence,
+    };
+  });
+
   if (errors.length === 0) {
     const youngest = Math.min(...spouses.map((s) => startYear - s.birthYear));
     if (endAge <= youngest) errors.push(`Âge de fin du plan : doit dépasser l'âge du plus jeune conjoint au départ (${youngest} ans).`);
@@ -181,6 +256,7 @@ export function toScenario(f: FormState): Parsed {
     spouses,
     targetNetSpending: spending,
     firstSpouseSpendingShare: share0,
+    ...(properties.length ? { properties } : {}),
     strategy,
     assumptions: {
       startYear, endAge,
@@ -233,6 +309,10 @@ export function formFromJson(text: string): FormState {
     const list = Array.isArray(s?.pensions) ? s!.pensions : d.spouses[i].pensions;
     return { ...base, pensions: list.map((p) => mergeStr(newPension(), p)) };
   }) as [SpouseForm, SpouseForm];
+  const properties = (Array.isArray(src.properties) ? src.properties : []).map((p) => {
+    const merged = mergeStr(newProperty(str(src.assumptions?.startYear, d.assumptions.startYear)), p);
+    return { ...merged, owner: (["both", "0", "1"] as const).includes(merged.owner) ? merged.owner : "both" } as PropertyForm;
+  });
   return {
     version: 1,
     spending: str(src.spending, d.spending),
@@ -240,6 +320,7 @@ export function formFromJson(text: string): FormState {
     estateTaxRate: str(src.estateTaxRate, d.estateTaxRate),
     nonRegTaxRate: str(src.nonRegTaxRate, d.nonRegTaxRate),
     spouses,
+    properties,
     strategy: mergeStr(d.strategy, src.strategy),
   };
 }
@@ -269,6 +350,7 @@ const KEY_LABELS: Record<string, string> = {
   estateTaxRate: "Impôt présumé sur le REER/FERR restant", nonRegTaxRate: "Impôt présumé sur le non enregistré",
   name: "Prénom", birthYear: "Année de naissance", deathAge: "Âge au décès", lifeExpectancy: "Espérance de vie à 65 ans", reer: "REER/FERR", celi: "CELI", celiRoom: "Droits CELI inutilisés",
   nonReg: "Compte non enregistré", rrqAmount: "RRQ, montant à 65 ans", rrqStartAge: "RRQ, début", psvAmount: "PSV, montant à 65 ans", psvStartAge: "PSV, début",
+  owner: "propriétaire", principalResidence: "résidence principale", purchaseYear: "année d'achat", purchasePrice: "prix d'achat", saleYear: "année de vente", salePrice: "prix de vente",
   label: "nom", amount: "montant annuel", startAge: "début", indexation: "indexation", survivorPct: "part au survivant",
   harmonization: "harmonisation RRQ à 65 ans", amountAt65: "montant à 65 ans",
   expenseShare: "Part des dépenses du couple",
@@ -304,12 +386,14 @@ export function describeChanges(base: FormState, cur: FormState): string[] {
   const show = (path: string, v: string) => {
     if (v === "") return "vide";
     if (path === "strategy.kind") return STRATEGY_NAMES.find(([k]) => k === v)?.[1] ?? v;
+    if (/^properties\.\d+\.owner$/.test(path)) return v === "both" ? "les deux" : who(v);
     return v === "true" ? "oui" : v === "false" ? "non" : v;
   };
   const label = (path: string): string => {
     const seg = path.split(".");
     const last = KEY_LABELS[seg[seg.length - 1]] ?? seg[seg.length - 1];
     if (seg[0] === "spouses" && seg[2] === "pensions") return `${who(seg[1])}, rente ${+seg[3] + 1} (${last})`;
+    if (seg[0] === "properties") return `Immeuble ${+seg[1] + 1} (${last})`;
     // Minuscule initiale, sauf pour les sigles (REER/FERR, CELI, RRQ, PSV).
     const lower = /^[A-ZÀ-Ý][a-zà-ÿ]/.test(last) ? last.charAt(0).toLowerCase() + last.slice(1) : last;
     if (seg[0] === "spouses") return `${who(seg[1])}, ${lower}`;
@@ -319,9 +403,15 @@ export function describeChanges(base: FormState, cur: FormState): string[] {
   const pensionNoted = new Set<string>();
   const notePension = (path: string, verb: string) => {
     const m = /^spouses\.(\d)\.pensions\.(\d+)\./.exec(path);
-    if (!m) return false;
-    const key = `${verb}${m[1]}.${m[2]}`;
-    if (!pensionNoted.has(key)) { pensionNoted.add(key); out.push(`${who(m[1])} : rente ${+m[2] + 1} ${verb}`); }
+    if (m) {
+      const key = `${verb}${m[1]}.${m[2]}`;
+      if (!pensionNoted.has(key)) { pensionNoted.add(key); out.push(`${who(m[1])} : rente ${+m[2] + 1} ${verb}`); }
+      return true;
+    }
+    const q = /^properties\.(\d+)\./.exec(path);
+    if (!q) return false;
+    const key = `immeuble${verb}${q[1]}`;
+    if (!pensionNoted.has(key)) { pensionNoted.add(key); out.push(`Immeuble ${+q[1] + 1} ${verb.replace(/ée$/, "é")}`); }
     return true;
   };
   for (const [p, v] of b) {

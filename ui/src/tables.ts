@@ -11,9 +11,10 @@ export function yearTable(s: Scenario, rows: YearResult[], real: boolean): strin
   const d = deflate(s, real);
   const sum = (y: YearResult, pick: (p: YearResult["spouses"][0]) => number) => y.spouses[0] ? pick(y.spouses[0]) + pick(y.spouses[1]) : 0;
   const [n0, n1] = s.spouses.map((x) => x.name);
+  const sales = rows.some((y) => y.spouses[0].propertyProceeds + y.spouses[1].propertyProceeds > 0);      // colonnes ajoutées seulement si un immeuble est vendu
   const head: { label: string; sub?: string }[] = [
     { label: "Année" }, { label: "Âges" }, { label: "Rentes de régimes" }, { label: "RRQ" }, { label: "PSV" }, { label: "Retraits REER/FERR" },
-    { label: "Retraits CELI et non enr." }, { label: "Impôt" }, { label: "PSV récupérée" }, { label: "Pension fractionnée" },
+    { label: "Retraits CELI et non enr." }, ...(sales ? [{ label: "Vente d'immeubles" }, { label: "Gain en capital imposable" }] : []), { label: "Impôt" }, { label: "PSV récupérée" }, { label: "Pension fractionnée" },
     { label: "Revenu imposable", sub: n0 }, { label: "Revenu imposable", sub: n1 }, { label: "Taux marginal", sub: n0 }, { label: "Taux marginal", sub: n1 },
     { label: "Dépenses visées" }, { label: "Manque" }, { label: "Solde REER/FERR" }, { label: "Solde CELI" }, { label: "Solde non enr." },
   ];
@@ -26,7 +27,9 @@ export function yearTable(s: Scenario, rows: YearResult[], real: boolean): strin
       String(y.year), ages,
       d(y.year, sum(y, (p) => p.pensionIncome)), d(y.year, sum(y, (p) => p.rrqIncome)), d(y.year, sum(y, (p) => p.psvIncome)),
       d(y.year, sum(y, (p) => p.reerWithdrawal)),
-      d(y.year, sum(y, (p) => p.celiWithdrawal + p.nonRegWithdrawal)), d(y.year, sum(y, (p) => p.tax)), d(y.year, sum(y, (p) => p.psvClawback)),
+      d(y.year, sum(y, (p) => p.celiWithdrawal + p.nonRegWithdrawal)),
+      ...(sales ? [d(y.year, sum(y, (p) => p.propertyProceeds)), d(y.year, sum(y, (p) => p.taxableCapitalGain))] : []),
+      d(y.year, sum(y, (p) => p.tax)), d(y.year, sum(y, (p) => p.psvClawback)),
       d(y.year, split), taxable(y, 0), taxable(y, 1), marginal(y, 0), marginal(y, 1),
       d(y.year, y.targetSpending), d(y.year, y.shortfall),
       d(y.year, sum(y, (p) => p.reerBalanceEnd)), d(y.year, sum(y, (p) => p.celiBalanceEnd)), d(y.year, sum(y, (p) => p.nonRegBalanceEnd)),

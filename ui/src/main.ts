@@ -3,12 +3,12 @@ import { benefitRanges, enumerateChoices, rankResults } from "../../src/index";
 import type { CompareOptions, DeathOrderComparison, FreeChoices, OptimizationResult, Scenario, StrategySummary, YearResult } from "../../src/index";
 import { runJob } from "./compute";
 import type { Job, JobResult } from "./compute";
-import { BALANCE_LEGEND, SOURCE_LEGEND, balancesChart, legend, sourcesChart } from "./charts";
+import { BALANCE_LEGEND, PROPERTY_LEGEND, SOURCE_LEGEND, balancesChart, legend, sourcesChart } from "./charts";
 import { comparePanel } from "./compare-view";
 import { planToCsv } from "./csv";
 import { esc, fmtMoney } from "./format";
 import { renderForm, setPath } from "./form";
-import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, shareComplement, strategyToForm, toScenario, applyBenefitChoice, benefitHint } from "./model";
+import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, newProperty, propertyHint, shareComplement, strategyToForm, toScenario, applyBenefitChoice, benefitHint } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
 import { confirmDialog } from "./dialog";
 import { OptimizationCancelled, runChoices, workerCount } from "./optimize-run";
@@ -235,7 +235,12 @@ inputs.addEventListener("input", (e) => {
   if (m) {
     const t = inputs.querySelector(`[data-title="${m[1]}"]`);
     if (t) t.textContent = el.value.trim() || `Conjoint ${+m[1] + 1}`;
+    // Le prénom apparaît aussi dans la liste des propriétaires de chaque immeuble.
+    inputs.querySelectorAll(`[data-name-opt="${m[1]}"]`).forEach((o) => { o.textContent = el.value.trim() || `Conjoint ${+m[1] + 1}`; });
   }
+  // Aperçu des immeubles : mis à jour en direct (et quand l'année de départ, l'inflation, la fin du plan ou une naissance change).
+  const refreshPropertyHints = () => formBody.querySelectorAll<HTMLElement>("[data-property-hint]").forEach((h) => { h.textContent = propertyHint(form, Number(h.dataset.propertyHint)); });
+  if (/^properties\.\d+\./.test(path) || /^(assumptions\.(startYear|inflation|endAge)|spouses\.\d\.birthYear)$/.test(path)) refreshPropertyHints();
   if (el.dataset.rerender) renderInputs(path); else refreshBase();
   if (path === "assumptions.startYear") renderUnits();
   schedulePlan();
@@ -264,7 +269,9 @@ inputs.addEventListener("click", async (e) => {
     form = structuredClone(base.form);
     persist(); markStale(); renderInputs(); schedulePlan(0); renderPanel(); return;
   }
-  if (b.dataset.action === "add-pension") form.spouses[i].pensions.push(newPension());
+  if (b.dataset.action === "add-property") { form.properties.push(newProperty(form.assumptions.startYear)); openSecs.add("properties"); }
+  else if (b.dataset.action === "remove-property") form.properties.splice(Number(b.dataset.index), 1);
+  else if (b.dataset.action === "add-pension") form.spouses[i].pensions.push(newPension());
   else if (b.dataset.action === "remove-pension") form.spouses[i].pensions.splice(Number(b.dataset.index), 1);
   else if (b.dataset.action === "reset") {
     if (!(await confirmDialog({ title: "Rétablir les valeurs d'exemple ?", message: "Toutes les données du formulaire seront remplacées par les valeurs d'exemple. Les données de base ne sont pas touchées.", confirmLabel: "Rétablir les valeurs d'exemple" }))) return;
@@ -351,7 +358,7 @@ function planPanel(): string {
     ${legend(BALANCE_LEGEND)}
     ${balancesChart(s, rows, real)}
     <h2>D'où vient l'argent</h2>
-    ${legend(SOURCE_LEGEND, `<li><span class="sw line"></span>Dépenses visées et impôt</li>${first ? `<li><span class="sw s-short"></span>Manque de fonds</li>` : ""}`)}
+    ${legend(plan.rows.some((y) => y.spouses[0].propertyProceeds + y.spouses[1].propertyProceeds > 0) ? [...SOURCE_LEGEND, PROPERTY_LEGEND] : SOURCE_LEGEND, `<li><span class="sw line"></span>Dépenses visées et impôt</li>${first ? `<li><span class="sw s-short"></span>Manque de fonds</li>` : ""}`)}
     ${sourcesChart(s, rows, real)}
     <p class="note">Quand les barres dépassent la ligne, l'excédent est réinvesti dans le CELI, puis dans le compte non enregistré.${first ? " Quand la ligne dépasse les barres, la zone rouge est le manque : des dépenses visées ne sont pas financées." : ""}</p>`;
 }

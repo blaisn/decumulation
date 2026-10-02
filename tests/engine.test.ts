@@ -7,7 +7,7 @@ import { gompertz, representativeDeathAges } from "../src/engine/mortality";
 import { PSV_AGES, RRQ_AGES, psvAmount, psvFactor, rrqAmount, rrqEarlyMonthlyRate, rrqFactor } from "../src/engine/benefits";
 import { ALL_FREE, ageAtPlanEnd, applyChoice, benefitRanges, choiceKey, compareResults, countChoices, currentChoice, enumerateChoices, evaluateChoice, evaluateChoices, isFeasible, optimizeBenefits, rankResults } from "../src/engine/optimize";
 import type { ChoiceResult, FreeChoices } from "../src/engine/optimize";
-import type { Scenario, TaxYearTable } from "../src/engine/types";
+import type { Property, Scenario, TaxYearTable } from "../src/engine/types";
 
 const tax = table2026 as unknown as TaxYearTable;
 const total = (r: { tax: [number, number] }) => r.tax[0] + r.tax[1];
@@ -963,5 +963,159 @@ describe("optimisation de l'âge de début de la RRQ et de la PSV", () => {
     const res = optimizeBenefits(s, tax, {}, { rrq: [true, false], psv: [true, false] });
     expect(res.best.choice.rrq[0]).toBeLessThan(72);
     expect(res.best.choice.psv[0]).toBe(65);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("immeubles : vente, gain en capital et résidence principale", () => {
+  type Sp = Scenario["spouses"][0];
+  const person = (name: string, birthYear: number, o: Partial<Sp> = {}): Sp => ({
+    name, birthYear, dbPensions: [], rrq: { annualAmount: 0, startAge: 65 }, psv: { annualAmount: 0, startAge: 70 }, reer: 800000, celi: 100000, celiRoom: 30000, ...o,
+  });
+  const chalet: Property = { label: "Chalet", owner: "both", purchaseYear: 2000, purchasePrice: 200000, saleYear: 2030, salePrice: 600000, principalResidence: false };
+  const scen = (props: Property[] | undefined, extra: Partial<Scenario> = {}, a = person("A", 1971), b = person("B", 1971)): Scenario => ({
+    spouses: [a, b], targetNetSpending: 60000, properties: props,
+    assumptions: { startYear: 2026, endAge: 80, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 }, ...extra,
+  });
+  const at = (rows: ReturnType<typeof runProjection>, year: number) => rows.find((y) => y.year === year)!;
+  const sum = (y: ReturnType<typeof at>, f: (s: ReturnType<typeof at>["spouses"][0]) => number) => f(y.spouses[0]) + f(y.spouses[1]);
+  const t2030 = indexTable(tax, Math.pow(1.02, 4));      // table fiscale de 2030 (quatre ans d'inflation)
+
+  it("la table fiscale donne un taux d'inclusion de 50 %, et l'indexation ne le modifie pas", () => {
+    expect(tax.capitalGainsInclusion).toBe(0.5);
+    expect(indexTable(tax, 1.5).capitalGainsInclusion).toBe(0.5);
+  });
+  it("vente d'un immeuble détenu à parts égales : le produit et la moitié du gain imposable sont répartis entre les deux", () => {
+    const y = at(runProjection(scen([chalet]), tax), 2030);
+    expect(y.spouses.map((p) => p.propertyProceeds)).toEqual([300000, 300000]);
+    expect(y.spouses.map((p) => p.taxableCapitalGain)).toEqual([100000, 100000]);      // (600 000 - 200 000) x 50 % / 2
+  });
+  it("le gain imposable est du revenu : l'impôt est celui d'un revenu de 100 000 $ pour chacun", () => {
+    const y = at(runProjection(scen([chalet]), tax), 2030);
+    const expected = householdTax([{ age: 59, income: 100000, eligiblePension: 0 }, { age: 59, income: 100000, eligiblePension: 0 }], t2030);
+    expect(y.spouses[0].tax).toBeCloseTo(expected.tax[0], 6);
+    expect(y.spouses[1].tax).toBeCloseTo(expected.tax[1], 6);
+    expect(y.spouses[0].taxableIncome).toBeCloseTo(100000, 6);
+    expect(y.spouses[0].marginalRate).toBeGreaterThan(0.35);                   // le gain place les conjoints dans un palier élevé
+  });
+  it("le produit de la vente est de l'argent : il finance les dépenses, et le surplus après impôt est placé", () => {
+    const y = at(runProjection(scen([chalet]), tax), 2030);
+    expect(sum(y, (p) => p.reerWithdrawal)).toBe(0);                                      // plus besoin de retirer du REER cette année-là
+    expect(y.shortfall).toBe(0);
+    const placed = sum(y, (p) => p.celiContribution + p.nonRegContribution);
+    expect(placed).toBeCloseTo(600000 - sum(y, (p) => p.tax) - y.targetSpending, 4);      // produit - impôt - dépenses
+    expect(sum(y, (p) => p.celiContribution)).toBeGreaterThan(0);                         // d'abord au CELI (dans la limite des droits)
+    expect(sum(y, (p) => p.nonRegContribution)).toBeGreaterThan(0);                       // puis au compte non enregistré
+  });
+  it("sans la vente, les mêmes années exigent des retraits du REER : la vente les remplace", () => {
+    const base = runProjection(scen([]), tax);
+    expect(sum(at(base, 2030), (p) => p.reerWithdrawal)).toBeGreaterThan(50000);
+    expect(at(base, 2030).spouses[0].propertyProceeds).toBe(0);
+  });
+  it("résidence principale : le gain n'est pas imposé, mais tout le produit est reçu", () => {
+    const y = at(runProjection(scen([{ ...chalet, principalResidence: true }]), tax), 2030);
+    expect(y.spouses.map((p) => p.propertyProceeds)).toEqual([300000, 300000]);
+    expect(y.spouses.map((p) => p.taxableCapitalGain)).toEqual([0, 0]);
+    expect(sum(y, (p) => p.tax)).toBe(0);
+    expect(sum(y, (p) => p.celiContribution + p.nonRegContribution)).toBeCloseTo(600000 - y.targetSpending, 4);
+  });
+  it("le prix d'achat d'une résidence principale n'a aucun effet", () => {
+    const a = runProjection(scen([{ ...chalet, principalResidence: true, purchasePrice: 0 }]), tax);
+    const b = runProjection(scen([{ ...chalet, principalResidence: true, purchasePrice: 550000 }]), tax);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+  it("propriétaire unique : tout le produit et tout le gain vont à ce conjoint", () => {
+    const y0 = at(runProjection(scen([{ ...chalet, owner: 0 }]), tax), 2030);
+    expect(y0.spouses.map((p) => p.propertyProceeds)).toEqual([600000, 0]);
+    expect(y0.spouses.map((p) => p.taxableCapitalGain)).toEqual([200000, 0]);
+    const y1 = at(runProjection(scen([{ ...chalet, owner: 1 }]), tax), 2030);
+    expect(y1.spouses.map((p) => p.propertyProceeds)).toEqual([0, 600000]);
+    expect(y1.spouses.map((p) => p.taxableCapitalGain)).toEqual([0, 200000]);
+  });
+  it("le conjoint qui détient tout paie plus d'impôt que deux conjoints à parts égales (impôt progressif)", () => {
+    const joint = sum(at(runProjection(scen([chalet]), tax), 2030), (p) => p.tax);
+    const seul = sum(at(runProjection(scen([{ ...chalet, owner: 0 }]), tax), 2030), (p) => p.tax);
+    expect(seul).toBeGreaterThan(joint + 1000);
+  });
+  it("au décès d'un propriétaire, sa part passe au survivant sans impôt, et la vente est imposée au survivant", () => {
+    const dead = person("A", 1971, { deathAge: 57 });           // décède fin 2028
+    for (const owner of ["both", 0, 1] as const) {
+      const rows = runProjection(scen([{ ...chalet, owner }], {}, dead), tax);
+      const y = at(rows, 2030);
+      expect(y.spouses[0].alive).toBe(false);
+      expect(y.spouses.map((p) => p.propertyProceeds)).toEqual([0, 600000]);
+      expect(y.spouses.map((p) => p.taxableCapitalGain)).toEqual([0, 200000]);
+      for (const yr of [2027, 2028]) expect(sum(at(rows, yr), (p) => p.propertyProceeds)).toBe(0);      // aucune vente avant 2030
+    }
+  });
+  it("une vente l'année du décès est répartie normalement (le décès survient en fin d'année)", () => {
+    const y = at(runProjection(scen([chalet], {}, person("A", 1971, { deathAge: 59 })), tax), 2030);       // décès fin 2030
+    expect(y.spouses[0].alive).toBe(true);
+    expect(y.spouses.map((p) => p.propertyProceeds)).toEqual([300000, 300000]);
+  });
+  it("les gains et les pertes de la même année se compensent, par propriétaire", () => {
+    const gain: Property = { ...chalet, label: "A", purchasePrice: 200000, salePrice: 400000 };           // +200 000 $
+    const perte: Property = { ...chalet, label: "B", purchasePrice: 300000, salePrice: 260000 };          // -40 000 $
+    const y = at(runProjection(scen([gain, perte]), tax), 2030);
+    expect(y.spouses.map((p) => p.taxableCapitalGain)).toEqual([40000, 40000]);                           // (200 000 - 40 000) x 50 % / 2
+    expect(sum(y, (p) => p.propertyProceeds)).toBe(660000);
+  });
+  it("une perte en capital n'est pas déduite du revenu : le gain imposable est nul, jamais négatif", () => {
+    const perte: Property = { ...chalet, purchasePrice: 700000, salePrice: 500000 };
+    const y = at(runProjection(scen([perte]), tax), 2030);
+    expect(y.spouses.map((p) => p.taxableCapitalGain)).toEqual([0, 0]);
+    expect(sum(y, (p) => p.propertyProceeds)).toBe(500000);
+    const gain: Property = { ...chalet, label: "G", purchasePrice: 100000, salePrice: 150000 };
+    const net = at(runProjection(scen([gain, { ...perte, label: "P", purchasePrice: 300000, salePrice: 100000 }]), tax), 2030);
+    expect(net.spouses.map((p) => p.taxableCapitalGain)).toEqual([0, 0]);                                  // perte nette
+  });
+  it("deux ventes d'années différentes sont traitées chacune dans leur année", () => {
+    const rows = runProjection(scen([chalet, { ...chalet, label: "Maison", saleYear: 2035, salePrice: 900000, purchasePrice: 400000 }]), tax);
+    expect(sum(at(rows, 2030), (p) => p.propertyProceeds)).toBe(600000);
+    expect(sum(at(rows, 2035), (p) => p.propertyProceeds)).toBe(900000);
+    expect(sum(at(rows, 2035), (p) => p.taxableCapitalGain)).toBe(250000);
+    expect(sum(at(rows, 2031), (p) => p.propertyProceeds)).toBe(0);
+  });
+  it("un immeuble sans vente, vendu après la fin du plan ou avant son début n'a aucun effet", () => {
+    const sans = JSON.stringify(runProjection(scen(undefined), tax));
+    expect(JSON.stringify(runProjection(scen([]), tax))).toBe(sans);
+    expect(JSON.stringify(runProjection(scen([{ ...chalet, saleYear: undefined, salePrice: undefined }]), tax))).toBe(sans);
+    expect(JSON.stringify(runProjection(scen([{ ...chalet, saleYear: 2090 }]), tax))).toBe(sans);
+    expect(JSON.stringify(runProjection(scen([{ ...chalet, saleYear: 2020 }]), tax))).toBe(sans);
+    expect(JSON.stringify(runProjection(scen([{ ...chalet, saleYear: 2030, salePrice: undefined }]), tax))).toBe(sans);
+  });
+  it("la vente n'est pas modifiée par le calcul : le scénario d'origine reste intact", () => {
+    const s = scen([chalet]);
+    const before = JSON.stringify(s);
+    runProjection(s, tax);
+    expect(JSON.stringify(s)).toBe(before);
+  });
+  it("après la vente, l'argent placé fait croître le patrimoine financier", () => {
+    const avec = runProjection(scen([chalet]), tax), sans = runProjection(scen([]), tax);
+    const last = (rows: typeof avec) => { const y = rows[rows.length - 1]; return sum(y, (p) => p.reerBalanceEnd + p.celiBalanceEnd + p.nonRegBalanceEnd); };
+    expect(last(avec)).toBeGreaterThan(last(sans) + 300000);
+    const fin = (rows: typeof avec) => summarize("", { kind: "reer-first" }, rows, scen([]).assumptions).afterTaxEstate;
+    expect(fin(avec)).toBeGreaterThan(fin(sans));
+  });
+  it("un gain élevé peut faire récupérer la PSV l'année de la vente seulement", () => {
+    const a = person("A", 1960, { psv: { annualAmount: 8700, startAge: 65 }, reer: 100000 }), b = person("B", 1960, { psv: { annualAmount: 8700, startAge: 65 }, reer: 100000 });
+    const rows = runProjection(scen([{ ...chalet, saleYear: 2028 }], {}, a, b), tax);
+    expect(sum(at(rows, 2028), (p) => p.psvClawback)).toBeGreaterThan(1000);
+    expect(sum(at(rows, 2027), (p) => p.psvClawback)).toBe(0);
+    expect(sum(at(rows, 2029), (p) => p.psvClawback)).toBe(0);
+  });
+  it("la fonte du REER tient compte du gain : pas de retrait forcé quand le revenu dépasse déjà le plafond", () => {
+    const meltdown = { strategy: { kind: "meltdown" as const, ceiling: 90000 } };
+    const sans = runProjection(scen([], meltdown), tax), avec = runProjection(scen([chalet], meltdown), tax);
+    expect(sum(at(sans, 2030), (p) => p.reerWithdrawal)).toBeGreaterThan(100000);       // sans vente : la fonte retire jusqu'au plafond
+    expect(sum(at(avec, 2030), (p) => p.reerWithdrawal)).toBe(0);                       // avec la vente : le gain occupe déjà le plafond
+  });
+  it("les stratégies et les durées de vie fonctionnent avec des immeubles", () => {
+    const s = scen([chalet]);
+    const strat = compareStrategies(s, tax, defaultCandidates().slice(0, 3));
+    expect(strat.length).toBe(3);
+    expect(strat.every((r) => Number.isFinite(r.afterTaxEstate))).toBe(true);
+    const dead = applyDeathScenario(s, { label: "x", deathAges: [60, undefined] });
+    expect(dead.properties?.length).toBe(1);
   });
 });
