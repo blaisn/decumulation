@@ -1,4 +1,4 @@
-import { STRATEGY_NAMES, benefitHint, shareComplement } from "./model";
+import { STRATEGY_NAMES, benefitHint, principalResidenceCount, propertyHint, shareComplement } from "./model";
 import type { FormState, SpouseForm } from "./model";
 import { esc } from "./format";
 
@@ -28,6 +28,27 @@ function pensionRows(sp: SpouseForm, i: number): string {
       ${p.harmonization ? field("Montant de la pension à 65 ans", `${base}.amountAt65`, p.amountAt65, { suffix: "$", wide: true, placeholder: p.amount, hint: "Laissé vide : identique au montant annuel. Entrez la rente après harmonisation, pas le montant de la réduction." }) : ""}
     </div>
     <button type="button" class="link danger" data-action="remove-pension" data-spouse="${i}" data-index="${j}">Retirer cette rente</button></div>`;
+  }).join("");
+}
+
+/** Immeubles : un bloc par immeuble, avec propriétaire, résidence principale, achat et vente. */
+function propertyRows(f: FormState): string {
+  if (!f.properties.length) return `<p class="empty">Aucun immeuble : ajoutez une résidence, un chalet ou un immeuble à revenus que vous prévoyez vendre pendant le plan.</p>`;
+  const names = f.spouses.map((s, i) => s.name.trim() || `Conjoint ${i + 1}`);
+  return f.properties.map((p, j) => {
+    const b = `properties.${j}`;
+    const opt = (v: string, text: string, nameOf?: number) => `<option value="${v}"${p.owner === v ? " selected" : ""}${nameOf === undefined ? "" : ` data-name-opt="${nameOf}"`}>${esc(text)}</option>`;
+    return `<div class="property"><div class="grid pgrid">
+      ${textField("Nom de l'immeuble", `${b}.label`, p.label, { wide: true, placeholder: `Immeuble ${j + 1}` })}
+      <label class="f wide"><span class="lab">Propriétaire</span><select data-path="${b}.owner">${opt("both", "Les deux, à parts égales")}${opt("0", names[0], 0)}${opt("1", names[1], 1)}</select></label>
+      <label class="check wide"><input type="checkbox" data-path="${b}.principalResidence" data-rerender="1"${p.principalResidence ? " checked" : ""}><span>Résidence principale (gain en capital exonéré d'impôt)</span></label>
+      ${field("Année d'achat", `${b}.purchaseYear`, p.purchaseYear, { hint: "Avant le début du plan" })}
+      ${field("Prix d'achat", `${b}.purchasePrice`, p.purchasePrice, { suffix: "$", hint: p.principalResidence ? "Sans effet : gain exonéré" : "Coût fiscal, en dollars de l'année d'achat" })}
+      ${field("Année de vente", `${b}.saleYear`, p.saleYear, { placeholder: "aucune" })}
+      ${field("Prix de vente", `${b}.salePrice`, p.salePrice, { suffix: "$", hint: "En dollars courants de l'année de vente" })}
+      <p class="hint wide benefit" data-property-hint="${j}" aria-live="polite">${esc(propertyHint(f, j))}</p>
+    </div>
+    <button type="button" class="link danger" data-action="remove-property" data-index="${j}">Retirer cet immeuble</button></div>`;
   }).join("");
 }
 
@@ -85,6 +106,12 @@ export function renderForm(f: FormState, openSecs: Set<string>): string {
   </div></div></details>
   ${spouseSection(f.spouses[0], 0, o("spouse0"), f.spouses[0])}
   ${spouseSection(f.spouses[1], 1, o("spouse1"), f.spouses[0])}
+  <details class="sec" data-sec="properties"${o("properties") ? " open" : ""}><summary>Immeubles${f.properties.length ? ` (${f.properties.length})` : ""}</summary><div class="body">
+    <p class="note">Achetés avant le début du plan, sans hypothèque. À la vente, le produit est reçu dans l'année : il finance les dépenses, puis le surplus est placé au CELI et au compte non enregistré. Le gain en capital (imposable à 50 %) s'ajoute au revenu des propriétaires, sauf pour une résidence principale. Au décès d'un propriétaire, l'immeuble passe au conjoint survivant.</p>
+    ${propertyRows(f)}
+    ${principalResidenceCount(f) > 1 ? `<p class="alert soft" role="status">Plusieurs résidences principales sont cochées. Une famille ne peut en désigner qu'une par année : le calcul exonère tous les gains cochés, ce qui peut sous-estimer l'impôt.</p>` : ""}
+    <button type="button" class="link" data-action="add-property">Ajouter un immeuble</button>
+  </div></details>
   <details class="sec" data-sec="strategy"${o("strategy") ? " open" : ""}><summary>Stratégie de retrait</summary><div class="body">
     <label class="f wide"><span class="lab">Ordre des retraits</span><select data-path="strategy.kind" data-rerender="1">${STRATEGY_NAMES.map(([v, t]) => `<option value="${v}"${st.kind === v ? " selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
     ${needsCeiling ? `<div class="grid">

@@ -15,7 +15,9 @@ import { compareLongevity } from "../src/index";
 import { summarize } from "../src/index";
 import { ALL_FREE, benefitRanges, choiceKey, currentChoice, enumerateChoices, evaluateChoices, rankResults } from "../src/index";
 import type { BenefitChoice, ChoiceResult, OptimizationResult, Scenario } from "../src/index";
-import { RRQ_MAX_AT_65, applyBenefitChoice, benefitHint } from "../ui/src/model";
+import { RRQ_MAX_AT_65, applyBenefitChoice, benefitHint, newProperty, principalResidenceCount, propertyHint, CAPITAL_GAINS_INCLUSION } from "../ui/src/model";
+import type { FormState, PropertyForm } from "../ui/src/model";
+import { fmtMoney } from "../ui/src/format";
 import { choiceText, durationText, estimateSeconds, optionRows, plannedCount, progressText, resultsTable, verdictHtml } from "../ui/src/optimize-view";
 import { OptimizationCancelled, chunkChoices, runChoices, workerCount } from "../ui/src/optimize-run";
 import type { PoolWorker } from "../ui/src/optimize-run";
@@ -108,11 +110,13 @@ describe("export et affichage", () => {
     expect(csv.trim().split("\r\n").length).toBe(1 + rows.length * 2);
     expect(has(csv, '"<b>""Alex""</b>"')).toBe(true); // guillemets échappés
     const head = csv.split("\r\n")[0].split(";");
-    expect(head.length).toBe(24);
+    expect(head.length).toBe(26);
     expect(head[20]).toBe("Indice d'inflation (départ = 1)");    // les 21 premières colonnes n'ont pas bougé
     expect(head[21]).toBe("Taux marginal (%)");
     expect(head[22]).toBe("Dépenses visées");                      // colonnes ajoutées à la fin : les 22 premières n'ont pas bougé
     expect(head[23]).toBe("Part des dépenses (%)");
+    expect(head[24]).toBe("Vente d'immeubles");                       // colonnes ajoutées à la fin
+    expect(head[25]).toBe("Gain en capital imposable");
     const first = csv.split("\r\n")[1].split(";");
     expect(first[20]).toBe("1,0000");                              // indice d'inflation de l'année de départ
     expect(first[21]).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
@@ -957,5 +961,258 @@ describe("onglet Optimisation PSV/RRQ : calcul parallèle", () => {
     let message = "";
     try { await runChoices(scenario, {}, choices, () => {}, { chunkSize: 4, evaluate: () => { throw new Error("calcul impossible"); } }).promise; } catch (e) { message = (e as Error).message; }
     expect(message).toBe("calcul impossible");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("immeubles : formulaire et scénario", () => {
+  const chalet = (o: Partial<PropertyForm> = {}): PropertyForm => ({ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000", ...o });
+  const withProps = (...ps: PropertyForm[]): FormState => { const f = defaultForm(); f.properties = ps; return f; };
+  const errorsOf = (f: FormState) => toScenario(f).errors;
+  const plain = (t: string) => t.replace(/[\u00a0\u202f]/g, " ").replace(/&#39;/g, "'");       // texte affiché : espaces insécables et apostrophes décodés
+
+  it("par défaut : aucun immeuble, et le scénario n'a pas de champ « properties »", () => {
+    const f = defaultForm();
+    expect(f.properties).toEqual([]);
+    const sc = toScenario(f).scenario!;
+    expect("properties" in sc).toBe(false);
+  });
+  it("un nouvel immeuble : acheté 15 ans avant le début du plan, sans vente, valide, et sans effet sur le plan", () => {
+    const n = newProperty("2026");
+    expect(n).toEqual({ label: "", owner: "both", principalResidence: false, purchaseYear: "2011", purchasePrice: "", saleYear: "", salePrice: "" });
+    expect(newProperty("abc").purchaseYear).toBe("2011");
+    const f = withProps(n);
+    const r = toScenario(f);
+    expect(r.errors).toEqual([]);
+    expect(r.scenario!.properties).toEqual([{ label: "Immeuble 1", owner: "both", purchaseYear: 2011, purchasePrice: 0, principalResidence: false }]);
+    expect(JSON.stringify(runProjection(r.scenario!, tax))).toBe(JSON.stringify(runProjection(toScenario(defaultForm()).scenario!, tax)));
+  });
+  it("convertit la saisie : propriétaire, résidence principale, nombres avec espaces et virgule", () => {
+    const f = withProps(chalet({ owner: "0", salePrice: "600 000,50", purchasePrice: "200 000" }), chalet({ label: "", owner: "1", principalResidence: true, purchasePrice: "" }), chalet({ owner: "both" }));
+    const p = toScenario(f).scenario!.properties!;
+    expect(p[0]).toEqual({ label: "Chalet", owner: 0, purchaseYear: 2000, purchasePrice: 200000, saleYear: 2030, salePrice: 600000.5, principalResidence: false });
+    expect(p[1].owner).toBe(1);
+    expect(p[1].principalResidence).toBe(true);
+    expect(p[1].purchasePrice).toBe(0);              // facultatif pour une résidence principale
+    expect(p[1].label).toBe("Immeuble 2");
+    expect(p[2].owner).toBe("both");
+  });
+  it("l'achat doit précéder le début du plan : l'achat pendant le plan n'est pas encore pris en charge", () => {
+    for (const year of ["2026", "2030"]) {
+      const e = errorsOf(withProps(chalet({ purchaseYear: year })));
+      expect(e.some((x) => x.includes("Immeuble 1 (Chalet) : année d'achat") && x.includes("doit précéder le début du plan (2026)") && x.includes("pas encore pris en charge"))).toBe(true);
+    }
+    expect(errorsOf(withProps(chalet({ purchaseYear: "2025" })))).toEqual([]);
+  });
+  it("la vente doit avoir lieu à partir du début du plan", () => {
+    expect(errorsOf(withProps(chalet({ saleYear: "2025" }))).some((x) => x.includes("année de vente 2025") && x.includes("début du plan (2026)"))).toBe(true);
+    expect(errorsOf(withProps(chalet({ saleYear: "2026" })))).toEqual([]);
+  });
+  it("avec une vente, le prix de vente est obligatoire, et le prix d'achat aussi sauf pour une résidence principale", () => {
+    expect(errorsOf(withProps(chalet({ salePrice: "" })))).toEqual(["Immeuble 1 (Chalet) : prix de vente : entrez une valeur."]);
+    expect(errorsOf(withProps(chalet({ purchasePrice: "" })))).toEqual(["Immeuble 1 (Chalet) : prix d'achat : entrez une valeur."]);
+    expect(errorsOf(withProps(chalet({ purchasePrice: "", principalResidence: true })))).toEqual([]);
+  });
+  it("sans vente, les prix sont facultatifs mais doivent être valides s'ils sont saisis", () => {
+    expect(errorsOf(withProps(chalet({ saleYear: "", salePrice: "", purchasePrice: "" })))).toEqual([]);
+    expect(errorsOf(withProps(chalet({ saleYear: "", salePrice: "abc" }))).length).toBe(1);
+    expect(errorsOf(withProps(chalet({ saleYear: "", purchasePrice: "-5" }))).some((x) => x.includes("prix d'achat"))).toBe(true);
+  });
+  it("refuse des années non entières et des prix négatifs, en nommant l'immeuble", () => {
+    expect(errorsOf(withProps(chalet({ purchaseYear: "2000,5" }))).some((x) => x.includes("Immeuble 1 (Chalet) : année d'achat : entrez un nombre entier"))).toBe(true);
+    expect(errorsOf(withProps(chalet({ saleYear: "abc" }))).some((x) => x.includes("année de vente") && x.includes("n'est pas un nombre"))).toBe(true);
+    expect(errorsOf(withProps(chalet({ salePrice: "-1" }))).some((x) => x.includes("prix de vente"))).toBe(true);
+    const e = errorsOf(withProps(chalet(), chalet({ label: "", salePrice: "" })));
+    expect(e).toEqual(["Immeuble 2 : prix de vente : entrez une valeur."]);
+  });
+  it("principalResidenceCount compte les résidences principales cochées", () => {
+    expect(principalResidenceCount(withProps())).toBe(0);
+    expect(principalResidenceCount(withProps(chalet({ principalResidence: true }), chalet(), chalet({ principalResidence: true })))).toBe(2);
+  });
+
+  // ---- aperçu
+  it("aperçu sans vente : l'immeuble n'a aucun effet", () => {
+    expect(propertyHint(withProps(chalet({ saleYear: "", salePrice: "" })), 0)).toContain("n'a aucun effet sur les calculs");
+    expect(propertyHint(withProps(), 3)).toBe("");
+  });
+  it("aperçu d'une vente : prix en dollars de départ, gain en capital et part imposable", () => {
+    const t = plain(propertyHint(withProps(chalet()), 0));
+    const deflated = plain(fmtMoney(600000 / Math.pow(1.02, 4)));
+    expect(t).toContain(`Prix de vente de ${deflated} en dollars de 2026`);
+    expect(t).toContain("gain en capital de 400 000 $, dont 200 000 $ imposables");
+    expect(CAPITAL_GAINS_INCLUSION).toBe(0.5);
+  });
+  it("aperçu : résidence principale exonérée, perte en capital, aucun gain", () => {
+    expect(plain(propertyHint(withProps(chalet({ principalResidence: true })), 0))).toContain("résidence principale : gain exonéré d'impôt");
+    expect(plain(propertyHint(withProps(chalet({ purchasePrice: "700000" })), 0))).toContain("perte en capital de 100 000 $ (sans effet sur l'impôt)");
+    expect(plain(propertyHint(withProps(chalet({ purchasePrice: "600000" })), 0))).toContain("aucun gain en capital");
+  });
+  it("aperçu : avertit quand la vente a lieu après la fin du plan", () => {
+    const t = plain(propertyHint(withProps(chalet({ saleYear: "2060" })), 0));
+    expect(t).toContain("après la fin du plan (2057)");         // le plus jeune (1962) a 95 ans en 2057
+    expect(plain(propertyHint(withProps(chalet({ saleYear: "2057" })), 0))).not.toContain("après la fin du plan");
+  });
+  it("aperçu vide tant que l'année ou le prix de vente n'est pas valide", () => {
+    expect(propertyHint(withProps(chalet({ salePrice: "" })), 0)).toBe("");
+    expect(propertyHint(withProps(chalet({ saleYear: "abc" })), 0)).toBe("");
+    expect(propertyHint(withProps(chalet({ salePrice: "-4" })), 0)).toBe("");
+  });
+
+  // ---- formulaire
+  it("la section « Immeubles » : message vide, bouton d'ajout, puis un bloc par immeuble avec le compte dans le titre", () => {
+    const empty = renderForm(defaultForm(), new Set(["properties"]));
+    expect(empty).toContain("Aucun immeuble");
+    expect(empty).toContain('data-action="add-property"');
+    expect(empty).toContain("<summary>Immeubles</summary>");
+    expect(empty).toContain("sans hypothèque");
+    const f = withProps(chalet(), chalet({ label: "Maison" }));
+    const html = renderForm(f, new Set(["properties"]));
+    expect(html).toContain("<summary>Immeubles (2)</summary>");
+    expect((html.match(/class="property"/g) ?? []).length).toBe(2);
+    expect((html.match(/data-action="remove-property"/g) ?? []).length).toBe(2);
+    for (const k of ["label", "owner", "principalResidence", "purchaseYear", "purchasePrice", "saleYear", "salePrice"]) expect(html).toContain(`data-path="properties.1.${k}"`);
+  });
+  it("le propriétaire se choisit parmi « les deux » et les prénoms, avec la valeur actuelle sélectionnée", () => {
+    const html = renderForm(withProps(chalet({ owner: "1" })), new Set(["properties"]));
+    const sel = /<select data-path="properties\.0\.owner">(.*?)<\/select>/.exec(html)![1];
+    expect(sel).toContain('<option value="both">Les deux, à parts égales</option>');
+    expect(sel).toContain('<option value="0" data-name-opt="0">Alex</option>');
+    expect(sel).toContain('<option value="1" selected data-name-opt="1">Sam</option>');
+  });
+  it("la case « résidence principale » est cochée selon l'état, et change l'indication du prix d'achat", () => {
+    const off = renderForm(withProps(chalet()), new Set(["properties"]));
+    expect(/data-path="properties\.0\.principalResidence" data-rerender="1"( checked)?>/.exec(off)![1]).toBe(undefined);
+    expect(plain(off)).toContain("Coût fiscal, en dollars de l'année d'achat");
+    const on = renderForm(withProps(chalet({ principalResidence: true })), new Set(["properties"]));
+    expect(/data-path="properties\.0\.principalResidence" data-rerender="1"( checked)?>/.exec(on)![1]).toBe(" checked");
+    expect(plain(on)).toContain("Sans effet : gain exonéré");
+  });
+  it("l'aperçu est affiché dans le bloc, et un avertissement apparaît si plusieurs résidences principales sont cochées", () => {
+    const one = plain(renderForm(withProps(chalet({ principalResidence: true })), new Set(["properties"])));
+    expect(/data-property-hint="0"[^>]*>[^<]*exonéré/.test(one)).toBe(true);
+    expect(one).not.toContain("Plusieurs résidences principales");
+    const two = plain(renderForm(withProps(chalet({ principalResidence: true }), chalet({ principalResidence: true })), new Set(["properties"])));
+    expect(two).toContain("Plusieurs résidences principales sont cochées");
+    expect(two).toContain("une famille ne peut en désigner qu'une par année".replace("une", "Une"));
+  });
+  it("les valeurs saisies sont échappées", () => {
+    const html = renderForm(withProps(chalet({ label: '<img src=x onerror=1>' })), new Set(["properties"]));
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img src=x");
+  });
+
+  // ---- changements, fichiers
+  it("le suivi des changements : ajout, retrait, champs et propriétaire en clair", () => {
+    const a = defaultForm();
+    const b = JSON.parse(JSON.stringify(a)) as FormState;
+    b.properties = [chalet()];
+    expect(describeChanges(a, b)).toEqual(["Immeuble 1 ajouté"]);
+    expect(describeChanges(b, a)).toEqual(["Immeuble 1 retiré"]);
+    const c = JSON.parse(JSON.stringify(b)) as FormState;
+    c.properties[0].salePrice = "650000"; c.properties[0].owner = "0"; c.properties[0].principalResidence = true;
+    expect(describeChanges(b, c)).toEqual(["Immeuble 1 (propriétaire) : les deux → Alex", "Immeuble 1 (résidence principale) : non → oui", "Immeuble 1 (prix de vente) : 600000 → 650000"]);
+  });
+  it("les champs modifiés d'un immeuble sont repérés par leur chemin", () => {
+    const a = withProps(chalet()), b = JSON.parse(JSON.stringify(a)) as FormState;
+    b.properties[0].saleYear = "2031";
+    expect([...changedPaths(a, b)]).toEqual(["properties.0.saleYear"]);
+  });
+  it("l'aller-retour par fichier conserve les immeubles", () => {
+    const f = withProps(chalet({ owner: "1", principalResidence: true }), chalet({ label: "Maison", saleYear: "" }));
+    const back = fileFromJson(fileToJson(f, null)).form;
+    expect(back.properties).toEqual(f.properties);
+  });
+  it("un ancien fichier sans immeuble s'ouvre sans immeuble; un propriétaire invalide devient « les deux »", () => {
+    const old = JSON.parse(JSON.stringify(defaultForm())); delete old.properties;
+    expect(formFromJson(JSON.stringify({ form: old })).properties).toEqual([]);
+    const odd = JSON.parse(JSON.stringify(withProps(chalet()))); odd.properties[0].owner = "n'importe quoi";
+    expect(formFromJson(JSON.stringify({ form: odd })).properties[0].owner).toBe("both");
+    const partial = JSON.parse(JSON.stringify(defaultForm())); partial.properties = [{ label: "X", salePrice: 5 }];
+    const p = formFromJson(JSON.stringify({ form: partial })).properties[0];
+    expect(p.salePrice).toBe("5");
+    expect(p.owner).toBe("both");
+    expect(p.purchaseYear).toBe("2011");
+  });
+});
+
+describe("immeubles : résultats", () => {
+  const sc = (...ps: PropertyForm[]) => { const f = defaultForm(); f.properties = ps; return toScenario(f).scenario!; };
+  const chalet = (o: Partial<PropertyForm> = {}): PropertyForm => ({ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000", ...o });
+  const scenario = sc(chalet());
+  const rows = runProjection(scenario, tax);
+  const lines = (csv: string) => csv.trim().split("\r\n").slice(1).map((l) => l.split(";"));
+  const plain = (t: string) => t.replace(/[\u00a0\u202f]/g, " ").replace(/&#39;/g, "'");
+
+  it("CSV : le produit de la vente et le gain imposable de chaque conjoint, dans l'année de la vente seulement", () => {
+    const csv = lines(planToCsv(scenario, rows));
+    const row = (year: number, who: string) => csv.find((l) => l[0] === String(year) && l[1] === who)!;
+    expect(row(2030, "Alex")[24]).toBe("300000");
+    expect(row(2030, "Alex")[25]).toBe("100000");
+    expect(row(2030, "Sam")[24]).toBe("300000");
+    expect(row(2029, "Alex")[24]).toBe("0");
+    expect(row(2031, "Sam")[25]).toBe("0");
+    expect(Number(row(2030, "Alex")[12])).toBeGreaterThanOrEqual(100000);       // le revenu imposable comprend le gain
+  });
+  it("CSV : les deux colonnes sont à zéro quand il n'y a pas d'immeuble", () => {
+    const none = sc();
+    const csv = lines(planToCsv(none, runProjection(none, tax)));
+    expect(csv.every((l) => l[24] === "0" && l[25] === "0")).toBe(true);
+  });
+  it("CSV : un immeuble à un seul propriétaire donne tout à ce conjoint", () => {
+    const one = sc(chalet({ owner: "1" }));
+    const csv = lines(planToCsv(one, runProjection(one, tax)));
+    expect(csv.find((l) => l[0] === "2030" && l[1] === "Alex")![24]).toBe("0");
+    expect(csv.find((l) => l[0] === "2030" && l[1] === "Sam")![24]).toBe("600000");
+    expect(csv.find((l) => l[0] === "2030" && l[1] === "Sam")![25]).toBe("200000");
+  });
+  const heads = (html: string) => [...html.matchAll(/<th scope="col"[^>]*>([^<]*)(?:<span class="sub">[^<]*<\/span>)?<\/th>/g)].map((m) => plain(m[1]));
+
+  it("tableau annuel : sans vente, aucune colonne ajoutée", () => {
+    const none = sc();
+    const h = heads(yearTable(none, runProjection(none, tax), false));
+    expect(h).not.toContain("Vente d'immeubles");
+    expect(h).not.toContain("Gain en capital imposable");
+    expect(h.length).toBe(19);
+  });
+  it("tableau annuel : avec une vente, deux colonnes après les retraits, avec les montants de l'année de la vente", () => {
+    const html = yearTable(scenario, rows, false);
+    const h = heads(html);
+    expect(h.length).toBe(21);
+    const i = h.indexOf("Vente d'immeubles");
+    expect(i).toBe(h.indexOf("Retraits CELI et non enr.") + 1);
+    expect(h[i + 1]).toBe("Gain en capital imposable");
+    const tr = html.split("<tbody>")[1].split("</tr>").find((r) => r.includes('<th scope="row">2030</th>'))!;
+    const cells = [...tr.matchAll(/<td>([^<]*)<\/td>/g)].map((m) => plain(m[1]));
+    expect(cells[i - 2]).toBe("600 000");
+    expect(cells[i - 1]).toBe("200 000");
+    const other = html.split("<tbody>")[1].split("</tr>").find((r) => r.includes('<th scope="row">2031</th>'))!;
+    expect([...other.matchAll(/<td>([^<]*)<\/td>/g)].map((m) => plain(m[1]))[i - 2]).toBe("0");
+  });
+  it("tableau annuel : en dollars constants, le produit de la vente est ramené aux dollars de départ", () => {
+    const html = yearTable(scenario, rows, true);
+    const tr = html.split("<tbody>")[1].split("</tr>").find((r) => r.includes('<th scope="row">2030</th>'))!;
+    const i = heads(html).indexOf("Vente d'immeubles");
+    const v = Number(plain([...tr.matchAll(/<td>([^<]*)<\/td>/g)][i - 2][1]).replace(/\D/g, ""));
+    expect(Math.abs(v - Math.round(600000 / Math.pow(1.02, 4)))).toBeLessThanOrEqual(1);
+  });
+  it("graphique « D'où vient l'argent » : le produit de la vente est une source, dans l'année de la vente seulement", () => {
+    const d = sourcesData(scenario, rows, false);
+    const key = d.keys.find((k) => k.cls === "s-prop")!;
+    expect(key.name).toBe("Vente d'immeubles");
+    const k2030 = rows.findIndex((y) => y.year === 2030);
+    expect(key.v(rows[k2030])).toBe(600000);
+    expect(key.v(rows[k2030 + 1])).toBe(0);
+    const svg = sourcesChart(scenario, rows, false);
+    expect((svg.match(/class="s-prop"/g) ?? []).length).toBe(1);
+    expect(sourcesChart(sc(), runProjection(sc(), tax), false)).not.toContain('class="s-prop"');
+  });
+  it("graphique : la conservation de l'argent tient avec une vente (colonnes + manque = ligne + surplus réinvesti)", () => {
+    for (const s of [scenario, sc(chalet({ principalResidence: true })), sc(chalet({ owner: "0" }))]) {
+      const r = runProjection(s, tax);
+      for (const real of [false, true]) {
+        const d = sourcesData(s, r, real);
+        r.forEach((_, k) => expect(Math.abs(d.stacks[k] + d.shortfall[k] - d.outflow[k] - d.contributions[k])).toBeLessThan(1e-6));
+      }
+    }
   });
 });

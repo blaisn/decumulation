@@ -20,6 +20,7 @@ export interface JurisdictionTax {
 
 export interface TaxYearTable {
   year: number;
+  capitalGainsInclusion: number; // part imposable d'un gain en capital (50 %)
   rrqMaxAt65: number; // rente de retraite maximale du RRQ à 65 ans, par année (sert à la réduction avant 65 ans)
   federal: JurisdictionTax & {
     quebecAbatement: number;
@@ -40,6 +41,22 @@ export interface DbPension {
    * `annualAmount` s'applique avant 65 ans. Absent : la rente ne change pas à 65 ans.
    */
   amountAt65?: number;
+}
+
+/**
+ * Immeuble (résidence, chalet, immeuble à revenus...) acheté avant le début du plan, sans hypothèque, et vendu au plus une fois.
+ * À la vente, le produit est versé dans l'année (il finance les dépenses, puis le surplus est placé au CELI et au compte non
+ * enregistré) et le gain en capital s'ajoute au revenu imposable des propriétaires, sauf pour une résidence principale.
+ * Au décès d'un propriétaire, l'immeuble passe au conjoint survivant sans impôt (roulement), comme les autres actifs.
+ */
+export interface Property {
+  label: string;
+  owner: "both" | 0 | 1; // propriétaire : les deux conjoints à parts égales, ou le conjoint 0 ou 1 seulement
+  purchaseYear: number; // avant `startYear` : l'achat pendant le plan n'est pas encore pris en charge
+  purchasePrice: number; // prix d'achat (coût fiscal), en $ de l'année d'achat
+  saleYear?: number; // année de la vente, à partir de `startYear`; absent : pas vendu pendant le plan
+  salePrice?: number; // prix de vente, en $ COURANTS de l'année de vente (pas en dollars de `startYear`)
+  principalResidence: boolean; // gain en capital exonéré d'impôt
 }
 
 export interface PublicBenefit {
@@ -107,6 +124,7 @@ export interface Scenario {
    * Après un décès, le survivant a toute la dépense (réduite par `survivorSpendingRatio`).
    */
   firstSpouseSpendingShare?: number;
+  properties?: Property[]; // immeubles : aucun par défaut
   assumptions: Assumptions;
   strategy?: Strategy; // défaut : reer-first
 }
@@ -131,6 +149,8 @@ export interface SpouseYear {
   celiContribution: number;
   nonRegContribution: number;
   nonRegBalanceEnd: number;
+  propertyProceeds: number; // part de ce conjoint dans le produit de la vente d'immeubles de l'année, en dollars courants (argent non imposable)
+  taxableCapitalGain: number; // gain en capital imposable ajouté à son revenu (après le taux d'inclusion); 0 pour une résidence principale
   spending: number; // part de ce conjoint dans la dépense visée du ménage, en dollars courants (0 si décédé)
   spendingShare: number; // cette part en fraction de la dépense du ménage (1 pour le survivant, 0 si décédé)
   marginalRate: number; // taux marginal combiné (fédéral après abattement du Québec + Québec) du palier du revenu imposable; 0 si décédé
