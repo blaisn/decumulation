@@ -31,7 +31,7 @@ Pour construire sans publier : onglet Actions > « Installateur Windows » > Run
 
 ## 3. Construire à la main
 
-Sous Windows seulement (le MSI exige l'outil WiX, qu'electron-builder télécharge) :
+Sous Windows seulement (le MSI exige l'outil WiX, qu'electron-builder télécharge), avec Node.js 24 :
 
     npm install
     npm run dist

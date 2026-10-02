@@ -27,11 +27,11 @@ jobs:
       # Les types d'Electron suffisent pour vérifier le code : inutile de télécharger son binaire.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           # Le cache npm demande un package-lock.json : sans lui, on s'en passe.
           cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
 
