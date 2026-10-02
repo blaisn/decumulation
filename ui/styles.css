@@ -82,6 +82,8 @@ dialog.confirm .buttons { display: flex; flex-wrap: wrap; justify-content: flex-
 .lab { font-size: 12.5px; color: var(--muted); }
 .hint { font-size: 11.5px; color: var(--muted); }
 p.hint { margin: -4px 0 4px; line-height: 1.4; }
+p.hint.benefit { min-height: 1.4em; margin-top: -2px; color: var(--ink); }
+p.hint.benefit:empty { display: none; }
 .ctl { position: relative; display: block; }
 .ctl input, select { width: 100%; height: 34px; padding: 0 9px; font: inherit; font-variant-numeric: tabular-nums; color: var(--ink); background: #fff; border: 1px solid var(--field); border-radius: 3px; }
 .ctl:has(.suf) input { padding-right: 34px; }
@@ -180,8 +182,8 @@ select#states { min-width: 340px; max-width: 100%; height: 34px; padding: 0 9px;
 
 /* ---- tableaux */
 .scroll { overflow: auto; border: 1px solid var(--rule); background: var(--panel); }
-.tall .scroll { max-height: calc(100vh - 250px); }
-.panel.notes-off .tall .scroll { max-height: calc(100vh - 188px); }     /* la note masquée libère de la hauteur pour le tableau */
+.tall .scroll { max-height: calc(100vh - 250px - var(--tabbar-extra, 0px)); }
+.panel.notes-off .tall .scroll { max-height: calc(100vh - 188px - var(--tabbar-extra, 0px)); }     /* la note masquée libère de la hauteur pour le tableau */
 .data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .data th, .data td { padding: 6px 7px; border-bottom: 1px solid var(--rule-soft); white-space: nowrap; }
 .data thead th { white-space: normal; vertical-align: bottom; line-height: 1.25; }
@@ -217,3 +219,21 @@ select#states { min-width: 340px; max-width: 100%; height: 34px; padding: 0 9px;
   .tabbar { position: static; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---- onglet Optimisation PSV/RRQ */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.optim-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px 24px; margin: 4px 0 8px; }
+.opt-spouse h3 { margin: 0 0 4px; font-size: 14px; }
+.opt-spouse h3 .age { font-weight: 400; color: var(--muted); }
+.opt-spouse ul { margin: 0; padding: 0; list-style: none; }
+.opt-spouse li { margin: 3px 0; }
+.opt-spouse label { display: flex; align-items: flex-start; gap: 8px; }
+.opt-spouse li.fixed label { color: var(--muted); }
+.opt-spouse .count { color: var(--muted); }
+.optim-progress { margin: 8px 0; max-width: 560px; }
+.optim-progress progress { width: 100%; height: 14px; }
+.best-choice { margin: 0 0 12px; }
+.data.optim .rank { font-weight: 400; color: var(--muted); }
+.data.optim tr.current th, .data.optim tr.current td { background: #fdf3df; }
+.data.optim td.chg { font-weight: 700; }
+.note.intro { max-width: 72ch; margin-bottom: 12px; font-size: 14px; }

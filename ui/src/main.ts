@@ -1,5 +1,6 @@
 import { gompertz, representativeDeathAges, summarize } from "../../src/index";
-import type { CompareOptions, DeathOrderComparison, Scenario, StrategySummary, YearResult } from "../../src/index";
+import { benefitRanges, enumerateChoices, rankResults } from "../../src/index";
+import type { CompareOptions, DeathOrderComparison, FreeChoices, OptimizationResult, Scenario, StrategySummary, YearResult } from "../../src/index";
 import { runJob } from "./compute";
 import type { Job, JobResult } from "./compute";
 import { BALANCE_LEGEND, SOURCE_LEGEND, balancesChart, legend, sourcesChart } from "./charts";
@@ -7,9 +8,12 @@ import { comparePanel } from "./compare-view";
 import { planToCsv } from "./csv";
 import { esc, fmtMoney } from "./format";
 import { renderForm, setPath } from "./form";
-import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, shareComplement, strategyToForm, toScenario } from "./model";
+import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, shareComplement, strategyToForm, toScenario, applyBenefitChoice, benefitHint } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
 import { confirmDialog } from "./dialog";
+import { OptimizationCancelled, runChoices, workerCount } from "./optimize-run";
+import type { OptimizationRun, PoolDeps, PoolWorker } from "./optimize-run";
+import { durationText, estimateSeconds, optionRows, plannedCount, progressText, resultsTable, verdictHtml } from "./optimize-view";
 import { openScenarioFile, saveFile } from "./platform";
 import { parsePrefs } from "./prefs";
 import { deathBestTable, deathMatrix, deathRankTable, strategiesTable, yearTable } from "./tables";
@@ -18,7 +22,7 @@ import { deathBestTable, deathMatrix, deathRankTable, strategiesTable, yearTable
 const STORE_KEY = "decumulation.form.v1";
 const BASE_KEY = "decumulation.base.v1";
 const PREFS_KEY = "decumulation.prefs.v1";
-type Tab = "plan" | "detail" | "compare" | "strategies" | "deaths";
+type Tab = "plan" | "detail" | "compare" | "strategies" | "deaths" | "optim";
 
 // ---------------------------------------------------------------- état
 let form: FormState = loadSaved() ?? defaultForm();
@@ -43,8 +47,18 @@ let basePlan: { scenario: Scenario; rows: YearResult[]; options: CompareOptions 
 let baseErrors: string[] = [];
 let strategies: StrategySummary[] | null = null;
 let deaths: DeathOrderComparison | null = null;
-const stale = { strategies: false, deaths: false };
-const busy = { strategies: false, deaths: false };
+const stale = { strategies: false, deaths: false, optim: false };
+const busy = { strategies: false, deaths: false, optim: false };
+
+// Optimisation PSV/RRQ : décisions à explorer, résultats, calcul en cours.
+let optimFree: FreeChoices = { rrq: [true, true], psv: [true, true] };
+let optim: OptimizationResult | null = null;
+let optimScenario: Scenario | null = null;
+let optimRun: OptimizationRun | null = null;
+let optimProgress = { done: 0, total: 0, startedAt: 0 };
+let optimDirty = false;     // le formulaire a changé pendant le calcul
+let planMs = 0;             // durée mesurée (dans le worker) d'un calcul de plan : sert à estimer la durée de l'optimisation
+let lastComputeMs = 0;
 let compareError = "";
 
 function loadSaved(): FormState | null {
@@ -73,16 +87,19 @@ let nextId = 1;
 const pending = new Map<number, { job: Job; resolve: (r: JobResult) => void; reject: (e: Error) => void }>();
 
 function inline(job: Job): Promise<JobResult> {
-  return new Promise((resolve, reject) => setTimeout(() => { try { resolve(runJob(job)); } catch (e) { reject(e as Error); } }, 30));
+  return new Promise((resolve, reject) => setTimeout(() => {
+    try { const t0 = performance.now(); const r = runJob(job); lastComputeMs = performance.now() - t0; resolve(r); } catch (e) { reject(e as Error); }
+  }, 30));
 }
 function ensureWorker() {
   if (worker || workerBroken) return;
   try {
     worker = new Worker("worker.js");
-    worker.onmessage = (e: MessageEvent<{ id: number; ok: boolean; result?: JobResult; error?: string }>) => {
+    worker.onmessage = (e: MessageEvent<{ id: number; ok: boolean; result?: JobResult; error?: string; ms?: number }>) => {
       const p = pending.get(e.data.id);
       if (!p) return;
       pending.delete(e.data.id);
+      if (e.data.ms !== undefined) lastComputeMs = e.data.ms;
       if (e.data.ok) p.resolve(e.data.result!); else p.reject(new Error(e.data.error));
     };
     worker.onerror = () => {
@@ -100,22 +117,26 @@ function run(job: Job): Promise<JobResult> {
 
 let planToken = 0;
 let planTimer = 0;
+let planPending = false;     // le formulaire a changé et le plan n'est pas encore recalculé : `plan` ne correspond plus au formulaire
 function schedulePlan(delay = 250) {
   window.clearTimeout(planTimer);
+  planPending = true;
   planTimer = window.setTimeout(async () => {
     const parsed = toScenario(form);
     planErrors = parsed.errors;
-    if (!parsed.scenario) { plan = null; renderPanel(); return; }
+    if (!parsed.scenario) { plan = null; planPending = false; renderPanel(); return; }
     const token = ++planToken;
     try {
       const rows = (await run({ kind: "plan", scenario: parsed.scenario })) as YearResult[];
       if (token !== planToken) return;
+      if (lastComputeMs > 0) planMs = lastComputeMs;
       plan = { scenario: parsed.scenario, rows, estateRates: parsed.options, longevity: parsed.lifeExpectancy };
       planErrors = [];
     } catch (e) {
       planErrors = [`Le calcul a échoué : ${(e as Error).message}`];
       plan = null;
     }
+    planPending = false;
     renderPanel();
   }, delay);
 }
@@ -184,6 +205,8 @@ function markChanged(paths: Set<string>) {
 function markStale() {
   if (strategies) stale.strategies = true;
   if (deaths) stale.deaths = true;
+  if (optim) stale.optim = true;
+  if (busy.optim) optimDirty = true;
 }
 
 inputs.addEventListener("input", (e) => {
@@ -195,6 +218,14 @@ inputs.addEventListener("input", (e) => {
   // Le montant à 65 ans, laissé vide, affiche le montant annuel : le suivre quand on le modifie.
   const pa = /^(spouses\.\d\.pensions\.\d+)\.amount$/.exec(path);
   if (pa) formBody.querySelector(`[data-path="${pa[1]}.amountAt65"]`)?.setAttribute("placeholder", el.value);
+  // Aperçu de la rente RRQ / PSV selon l'âge de début : mise à jour en direct.
+  const bm = /^(spouses\.(\d))\.(rrq|psv)(Amount|StartAge)$/.exec(path);
+  if (bm) {
+    const sp = form.spouses[Number(bm[2])];
+    const kind = bm[3] as "rrq" | "psv";
+    const hint = formBody.querySelector(`[data-benefit-hint="${bm[1]}.${kind}"]`);
+    if (hint) hint.textContent = benefitHint(kind, kind === "rrq" ? sp.rrqAmount : sp.psvAmount, kind === "rrq" ? sp.rrqStartAge : sp.psvStartAge);
+  }
   // La part du second conjoint est déduite de celle du premier : mise à jour en direct.
   if (path === "spouses.0.expenseShare") {
     const other = formBody.querySelector<HTMLInputElement>("[data-share-complement]");
@@ -244,7 +275,7 @@ inputs.addEventListener("click", async (e) => {
 });
 
 // ---------------------------------------------------------------- résultats
-const TABS: [Tab, string][] = [["plan", "Plan"], ["detail", "Détail annuel"], ["compare", "Comparaison à la base"], ["strategies", "Stratégies"], ["deaths", "Ordre des décès"]];
+const TABS: [Tab, string][] = [["plan", "Plan"], ["detail", "Détail annuel"], ["compare", "Comparaison à la base"], ["strategies", "Stratégies"], ["deaths", "Ordre des décès"], ["optim", "Optimisation PSV/RRQ"]];
 // Masquer le formulaire : l'onglet « Détail annuel » prend alors toute la largeur de la fenêtre.
 const splitEl = document.querySelector(".split") as HTMLElement;
 const toggleBtn = document.getElementById("toggle-form") as HTMLButtonElement;
@@ -272,6 +303,16 @@ unitsEl.addEventListener("click", (e) => {
   real = b.dataset.real === "true"; savePrefs(); renderUnits(); renderPanel();
 });
 const tabsEl = document.getElementById("tabs") as HTMLElement;
+// La barre d'onglets passe sur deux rangées quand la fenêtre est étroite : le tableau du Détail annuel perd alors de la hauteur.
+// On mesure l'excédent par rapport à une seule rangée (55 px) pour que le tableau ne dépasse pas le bas de la fenêtre.
+const tabbarEl = document.querySelector(".tabbar") as HTMLElement;
+const TABBAR_ONE_ROW = 55;
+function syncTabbarHeight() {
+  document.documentElement.style.setProperty("--tabbar-extra", `${Math.max(0, tabbarEl.offsetHeight - TABBAR_ONE_ROW)}px`);
+}
+if (typeof ResizeObserver !== "undefined") new ResizeObserver(syncTabbarHeight).observe(tabbarEl);
+syncTabbarHeight();
+
 function renderTabs() {
   tabsEl.innerHTML = TABS.map(([id, label]) => `<button type="button" role="tab" id="tab-${id}" aria-selected="${id === tab}" aria-controls="panel" data-tab="${id}" tabindex="${id === tab ? 0 : -1}">${esc(label)}</button>`).join("");
 }
@@ -405,8 +446,62 @@ function deathsPanel(): string {
     ${results}`;
 }
 
+/** Paramètres du calcul parallèle : Web Workers si possible, sinon calcul par lots dans le fil principal. */
+function poolDeps(): PoolDeps {
+  return {
+    createWorker: workerBroken ? undefined : () => new Worker("worker.js") as unknown as PoolWorker,
+    workers: workerCount(navigator.hardwareConcurrency),
+    evaluate: runJob,
+    yieldToUi: () => new Promise((resolve) => setTimeout(resolve, 0)),
+  };
+}
+
+function optimPanel(): string {
+  const ready = !planErrors.length && plan;
+  const unit = plan ? unitLabel(plan.scenario) : "dollars constants";
+  const count = plan ? plannedCount(plan.scenario, optimFree) : 0;
+  const workers = workerCount(navigator.hardwareConcurrency);
+  const eta = durationText(estimateSeconds(count, planMs || 60, workers));
+  const staleNote = stale.optim && optim ? `<p class="alert soft" role="status">Les données ont changé depuis cette optimisation. Relancez-la pour mettre les résultats à jour.</p>` : "";
+  const running = busy.optim;
+  const progress = running
+    ? `<div class="optim-progress"><progress id="optim-bar" max="${optimProgress.total}" value="${optimProgress.done}" aria-label="Progression de l'optimisation"></progress><p id="optim-progress-text" role="status">${esc(progressText(optimProgress.done, optimProgress.total, performance.now() - optimProgress.startedAt))}</p></div>`
+    : "";
+  const options = plan ? `<div class="optim-options" role="group" aria-label="Décisions à explorer">${optionRows(plan.scenario, optimFree)}</div>
+    <p class="note" id="optim-count">${count.toLocaleString("fr-CA")} combinaison${count > 1 ? "s" : ""} à essayer, ${esc(eta)} sur cet ordinateur${count > 2500 ? ". C'est long : décochez une décision pour réduire la durée" : ""}.</p>` : "";
+  const results = optim && optimScenario && !running
+    ? `<div class="${stale.optim ? "stale" : ""}">${verdictHtml(optimScenario, optim, real)}
+        <div class="toolbar">${optim.best.key !== optim.current.key ? `<button type="button" class="primary" data-action="apply-benefits" data-index="0">Appliquer la meilleure combinaison</button>` : ""}</div>
+        <h2>Meilleures combinaisons</h2>
+        <p class="note">Montants en ${esc(unit)}. Les âges qui diffèrent de vos choix actuels sont en gras. La succession est la valeur des placements restants à la fin du plan, après l'impôt présumé (${Math.round((plan?.estateRates.estateTaxRate ?? 0.45) * 100)} % sur le REER/FERR restant). ${optim.anyFeasible ? "" : "Aucune combinaison ne finançant toutes les dépenses, le classement va du plus petit au plus grand manque cumulé."}</p>
+        ${resultsTable(optimScenario, optim, real)}</div>`
+    : "";
+  return `<p class="note intro">Explore les âges de début de la RRQ et de la PSV de chaque conjoint, en tenant compte de la réduction avant 65 ans et de la bonification du report, et classe les combinaisons selon ce qui reste à la fin du plan après impôt (ou, si les dépenses ne sont pas toutes financées, selon le manque cumulé).</p>
+    ${options}
+    <div class="toolbar">${running
+      ? `<button type="button" class="ghost dark" id="cancel-optim" data-action="cancel-optim">Annuler</button>`
+      : `<button type="button" class="primary" id="run-optim" data-action="run-optim"${ready && !planPending && count > 0 ? "" : " disabled"}>${optim ? "Relancer l'optimisation" : "Lancer l'optimisation"}</button>`}</div>
+    ${progress}
+    ${compareError && !running ? `<div class="alert" role="alert">${esc(compareError)}</div>` : ""}
+    ${!ready ? errorsBlock() : ""}
+    ${staleNote}
+    ${results}
+    <details class="more"><summary>Comment ça fonctionne</summary>
+      <p class="note">Chaque combinaison est calculée avec le reste du plan tel que saisi (stratégie de retrait, fractionnement, décès éventuels). Le montant de la RRQ et de la PSV saisi dans le formulaire est celui de 65 ans : la RRQ est réduite de 0,5 % à 0,6 % par mois avant 65 ans (selon le montant de la rente) et bonifiée de 0,7 % par mois jusqu'à 72 ans; la PSV est bonifiée de 0,6 % par mois jusqu'à 70 ans. Le classement dépend de la durée du plan et des rendements supposés. Un décès plus tôt favorise les rentes prises tôt : vérifiez la combinaison choisie avec l'onglet « Ordre des décès ».</p>
+    </details>`;
+}
+
+/** Met à jour la barre de progression sans réafficher tout l'onglet. */
+function onOptimProgress(done: number, total: number) {
+  optimProgress = { ...optimProgress, done, total };
+  const bar = document.getElementById("optim-bar") as HTMLProgressElement | null;
+  if (bar) { bar.max = total; bar.value = done; }
+  const text = document.getElementById("optim-progress-text");
+  if (text) text.textContent = progressText(done, total, performance.now() - optimProgress.startedAt);
+}
+
 function renderPanel() {
-  const html = tab === "plan" ? planPanel() : tab === "detail" ? detailPanel() : tab === "compare" ? comparePanelHtml() : tab === "strategies" ? strategiesPanel() : deathsPanel();
+  const html = tab === "plan" ? planPanel() : tab === "detail" ? detailPanel() : tab === "compare" ? comparePanelHtml() : tab === "strategies" ? strategiesPanel() : tab === "deaths" ? deathsPanel() : optimPanel();
   const keep = document.activeElement?.id;
   panel.innerHTML = html + `<p class="disclaimer">Ces projections reposent sur des hypothèses simplifiées. Elles ne remplacent pas l'avis d'un planificateur financier ou d'un fiscaliste.</p>`;
   panel.className = `panel tab-${tab}${hideDetailNote ? " notes-off" : ""}`;
@@ -418,6 +513,11 @@ panel.addEventListener("change", (e) => {
   const el = e.target as HTMLInputElement | HTMLSelectElement;
   if (el.name === "deathMode") { deathMode = el.value as "longevity" | "first"; renderPanel(); }
   else if (el.id === "states") { longevityStates = Number(el.value) === 3 ? 3 : 5; renderPanel(); }
+  else if (el.dataset.free) {
+    const [kind, i] = el.dataset.free.split(":");
+    optimFree[kind as "rrq" | "psv"][Number(i) as 0 | 1] = (el as HTMLInputElement).checked;
+    renderPanel();
+  }
 });
 panel.addEventListener("input", (e) => {
   if ((e.target as HTMLElement).id === "deathAges") deathAgesText = (e.target as HTMLInputElement).value;
@@ -444,6 +544,30 @@ panel.addEventListener("click", async (e) => {
     try { strategies = (await run({ kind: "strategies", scenario: plan.scenario, options: plan.estateRates })) as StrategySummary[]; stale.strategies = false; }
     catch (err) { compareError = `La comparaison a échoué : ${(err as Error).message}`; }
     busy.strategies = false; renderPanel();
+  } else if (a === "run-optim" && plan && !busy.optim) {
+    const scenario = plan.scenario, options = plan.estateRates;
+    const choices = enumerateChoices(benefitRanges(scenario, optimFree));
+    busy.optim = true; optimDirty = false; compareError = "";
+    optimProgress = { done: 0, total: choices.length, startedAt: performance.now() };
+    renderPanel();
+    document.getElementById("cancel-optim")?.focus();
+    optimRun = runChoices(scenario, options, choices, onOptimProgress, poolDeps());
+    try {
+      optim = rankResults(scenario, await optimRun.promise);
+      optimScenario = scenario;
+      stale.optim = optimDirty;
+    } catch (err) {
+      if (!(err instanceof OptimizationCancelled)) compareError = `L'optimisation a échoué : ${(err as Error).message}`;
+    }
+    busy.optim = false; optimRun = null; renderPanel();
+    document.getElementById("run-optim")?.focus();
+  } else if (a === "cancel-optim") {
+    optimRun?.cancel();
+  } else if (a === "apply-benefits" && optim) {
+    const chosen = optim.ranked[Number(b.dataset.index)];
+    if (!chosen) return;
+    applyBenefitChoice(form, chosen.choice);
+    persist(); renderInputs(); markStale(); tab = "plan"; renderTabs(); schedulePlan(0); renderPanel();
   } else if (a === "run-deaths" && plan) {
     let job: Job;
     if (deathMode === "longevity") {
@@ -476,7 +600,8 @@ document.getElementById("open")!.addEventListener("click", async () => {
     if (!f) return;
     const opened = fileFromJson(f.content);
     form = opened.form; base = opened.base; persistBase(); void computeBasePlan();
-    strategies = null; deaths = null; stale.strategies = stale.deaths = false;
+    strategies = null; deaths = null; optim = null; optimScenario = null; stale.strategies = stale.deaths = stale.optim = false;
+    optimRun?.cancel();
     persist(); renderInputs(); schedulePlan(0); renderPanel();
   } catch (err) {
     planErrors = [`Impossible d'ouvrir ce fichier : ${(err as Error).message}`];

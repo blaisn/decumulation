@@ -1,5 +1,6 @@
 import type { Assumptions, DbPension, Scenario, SpouseInput, SpouseYear, Strategy, TaxYearTable, YearResult } from "./types";
 import { householdTax, indexTable, optimizeSplit, type HouseholdTaxResult } from "./tax";
+import { psvAmount, rrqAmount } from "./benefits";
 import { ferrMinFactor } from "./ferr";
 
 const grow = (rate: number, n: number) => Math.pow(1 + rate, n);
@@ -11,11 +12,11 @@ export function dbAmount(p: DbPension, age: number): number {
 }
 
 /** Revenus garantis : rentes RPA (admissibles au crédit et au fractionnement), RRQ et PSV. */
-function guaranteedIncome(sp: SpouseInput, age: number, n: number, a: Assumptions) {
+function guaranteedIncome(sp: SpouseInput, age: number, n: number, a: Assumptions, rrqMax: number) {
   let db = 0, rrq = 0, psv = 0;
   for (const p of sp.dbPensions) if (age >= p.startAge) db += dbAmount(p, age) * grow(p.indexation, n);
-  if (age >= sp.rrq.startAge) rrq += sp.rrq.annualAmount * grow(a.rrqIndexation, n);
-  if (age >= sp.psv.startAge) psv += sp.psv.annualAmount * grow(a.psvIndexation, n);
+  if (age >= sp.rrq.startAge) rrq += rrqAmount(sp.rrq, rrqMax) * grow(a.rrqIndexation, n);      // le montant saisi est celui de 65 ans : on applique la réduction ou la bonification
+  if (age >= sp.psv.startAge) psv += psvAmount(sp.psv) * grow(a.psvIndexation, n);
   return { db, rrq, psv };
 }
 
@@ -81,14 +82,14 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
 
     const g = s.spouses.map((sp, i) => {
       if (!alive[i]) return { db: 0, rrq: 0, psv: 0 };
-      const own = guaranteedIncome(sp, ages[i], n, a);
+      const own = guaranteedIncome(sp, ages[i], n, a, baseTax.rrqMaxAt65);
       if (both) return own;
       const dec = s.spouses[1 - i]; // survivant : prestations de conjoint survivant
       // Rente de survivant : part du montant que touchait le défunt à son âge au décès (après harmonisation s'il avait 65 ans ou plus).
       const ageAtDeath = dec.deathAge ?? ages[1 - i];
       for (const p of dec.dbPensions) own.db += dbAmount(p, ageAtDeath) * grow(p.indexation, n) * p.survivorPct;
       const cap = rrqCap * grow(a.rrqIndexation, n);
-      const combined = own.rrq + RRQ_SURVIVOR_PCT * dec.rrq.annualAmount * grow(a.rrqIndexation, n);
+      const combined = own.rrq + RRQ_SURVIVOR_PCT * rrqAmount(dec.rrq, baseTax.rrqMaxAt65) * grow(a.rrqIndexation, n);
       own.rrq = Math.max(own.rrq, Math.min(combined, cap));
       return own;
     });

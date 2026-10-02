@@ -1,4 +1,7 @@
-import type { CompareOptions, DbPension, Scenario, SpouseInput, Strategy } from "../../src/index";
+import table2026 from "../../src/engine/data/tax-2026.json";
+import { psvFactor, rrqFactor } from "../../src/index";
+import type { BenefitChoice, CompareOptions, DbPension, Scenario, SpouseInput, Strategy } from "../../src/index";
+import { fmtMoney } from "./format";
 
 // L'état du formulaire garde les valeurs telles que saisies (texte); la conversion se fait dans `toScenario`.
 
@@ -55,6 +58,32 @@ export function defaultForm(): FormState {
     spouses: [spouse("Alex", "1960", "45000", "50"), spouse("Sam", "1962", "25000")],
     strategy: { kind: "reer-first", ceiling: "90000", usePsvThreshold: true, untilAge: "" },
   };
+}
+
+/** Rente RRQ maximale à 65 ans (en $ de l'année de la table fiscale) : sert à la réduction avant 65 ans. */
+export const RRQ_MAX_AT_65 = (table2026 as unknown as { rrqMaxAt65: number }).rrqMaxAt65;
+
+/**
+ * Aperçu de la rente ajustée selon l'âge de début : le montant saisi est celui de 65 ans.
+ * Retourne une chaîne vide tant que le montant ou l'âge n'est pas valide.
+ */
+export function benefitHint(kind: "rrq" | "psv", amountText: string, ageText: string): string {
+  const amount = parseNumber(amountText), age = parseNumber(ageText);
+  const [lo, hi] = kind === "rrq" ? [60, 72] : [65, 70];
+  if (!Number.isFinite(amount) || amount < 0 || !Number.isInteger(age) || age < lo || age > hi) return "";
+  const factor = kind === "rrq" ? rrqFactor(age, amount, RRQ_MAX_AT_65) : psvFactor(age);
+  if (Math.abs(factor - 1) < 1e-9) return `À ${age} ans : le montant de 65 ans, sans réduction ni bonification.`;
+  const pct = Math.abs(factor - 1) * 100;
+  const sign = factor > 1 ? "+" : "−";
+  return `À ${age} ans : ${fmtMoney(amount * factor)} par année, soit ${sign}${pct.toLocaleString("fr-CA", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} % par rapport à 65 ans.`;
+}
+
+/** Applique une combinaison d'âges de début (RRQ et PSV de chaque conjoint) au formulaire. */
+export function applyBenefitChoice(f: FormState, c: BenefitChoice): void {
+  ([0, 1] as const).forEach((i) => {
+    f.spouses[i].rrqStartAge = String(c.rrq[i]);
+    f.spouses[i].psvStartAge = String(c.psv[i]);
+  });
 }
 
 /** Part du second conjoint, déduite de celle du premier (« 100 − part »); « — » si la saisie n'est pas valide. */
@@ -239,7 +268,7 @@ const KEY_LABELS: Record<string, string> = {
   nonRegTaxedShare: "Part imposable du rendement", celiAnnualLimit: "Plafond annuel du CELI", rrqSurvivorCap: "Plafond de la RRQ du survivant", applySplitting: "Fractionnement du revenu de pension",
   estateTaxRate: "Impôt présumé sur le REER/FERR restant", nonRegTaxRate: "Impôt présumé sur le non enregistré",
   name: "Prénom", birthYear: "Année de naissance", deathAge: "Âge au décès", lifeExpectancy: "Espérance de vie à 65 ans", reer: "REER/FERR", celi: "CELI", celiRoom: "Droits CELI inutilisés",
-  nonReg: "Compte non enregistré", rrqAmount: "RRQ, montant annuel", rrqStartAge: "RRQ, début", psvAmount: "PSV, montant annuel", psvStartAge: "PSV, début",
+  nonReg: "Compte non enregistré", rrqAmount: "RRQ, montant à 65 ans", rrqStartAge: "RRQ, début", psvAmount: "PSV, montant à 65 ans", psvStartAge: "PSV, début",
   label: "nom", amount: "montant annuel", startAge: "début", indexation: "indexation", survivorPct: "part au survivant",
   harmonization: "harmonisation RRQ à 65 ans", amountAt65: "montant à 65 ans",
   expenseShare: "Part des dépenses du couple",

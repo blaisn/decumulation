@@ -1,6 +1,7 @@
 {
-  "_note": "Sources: ARC (indexation 2026, 2 %); Revenu Québec, formulaire TP-1015.3 (2026-01) pour les montants du Québec. À VALIDER: seuil de l'âge fédéral (45 522 x 1,02). Phase-out du montant personnel fédéral ignoré (revenus > 181 440 $).",
+  "_note": "Sources: ARC (indexation 2026, 2 %); Revenu Québec, formulaire TP-1015.3 (2026-01) pour les montants du Québec. RRQ : rente maximale à 65 ans de 1 507,65 $ par mois en 2026 (Retraite Québec), soit 18 091,80 $. À VALIDER: seuil de l'âge fédéral (45 522 x 1,02). Phase-out du montant personnel fédéral ignoré (revenus > 181 440 $).",
   "year": 2026,
+  "rrqMaxAt65": 18091.8,
   "federal": {
     "brackets": [
       { "upTo": 58523, "rate": 0.14 },
