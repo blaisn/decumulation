@@ -34,6 +34,22 @@ Lancez d'abord `npm install` et gardez le `package-lock.json` qu'il crée : la C
 - `.github/pull_request_template.md` : description de PR préremplie (résumé, vérifications, changements de fiscalité ou d'hypothèses, compatibilité des données)
 - `.gitattributes` : fins de ligne LF pour tous les fichiers, afin que les différences restent lisibles quand on travaille sous Windows
 
+## Mise à jour d'Electron
+Electron publie une version majeure toutes les 8 semaines (une sur deux versions de Chromium) et ne soutient que les **trois dernières** : les correctifs de sécurité de Chromium n'arrivent pas dans les autres. Vérifiez les versions soutenues sur <https://releases.electronjs.org/> et visez la plus récente stable (en octobre 2026 : 42, 43 et 44; la 45 sort le 20 octobre). Le projet a été écrit avec Electron 33, qui n'est plus soutenu depuis longtemps.
+
+    npm install --save-dev electron@^44 electron-builder@^26
+    npm test                       # moteur, interface, processus Electron et intégration continue
+    npm run start                  # lance l'application : voir la vérification à la main plus bas
+    npm run dist                   # installateur, version portable et MSI
+
+Gardez `package-lock.json` (la CI utilise `npm ci`). Changements d'Electron qui concernent ce projet :
+- **42** : `npm install` ne télécharge plus le binaire d'Electron; il se télécharge au premier `npm run start` (réseau nécessaire), ou avec `npx install-electron`. L'empaquetage (`npm run dist`) le télécharge lui-même. La variable `ELECTRON_SKIP_BINARY_DOWNLOAD` de `.github/workflows/ci.yml` n'est plus utile et peut être retirée.
+- **43** : les boîtes Ouvrir/Enregistrer s'ouvrent dans « Téléchargements » si aucun dossier de départ n'est fourni, et le système ne retient plus le dernier dossier. `electron/dialog-dir.ts` le retient (dans `dialog-dir.txt` du dossier de données; Documents au premier lancement), et un test vérifie que `main.ts` fournit un dossier de départ aux deux boîtes.
+- **44** : plus de binaires 32 bits (Windows ia32); Windows 10 ou plus récent, x64 et arm64. Rien à changer : la configuration de construction ne demande aucune cible 32 bits.
+- **electron-builder** : la version stable est la **26** (la 27, en ESM et Node 22.12 ou plus, est encore en alpha). Le problème « Cannot create symbolic link » de `winCodeSign` (voir `docs/PUBLICATION.md`) vient de l'ancien outil que la 26 utilise encore par défaut : le dépannage reste valable.
+
+Vérification à la main après une mise à jour (Electron lui-même ne se teste pas dans la CI) : l'application s'ouvre et calcule; **Ouvrir** et **Enregistrer** (scénario JSON) s'ouvrent dans le dernier dossier utilisé et la boîte propose un nom; **Exporter en CSV**; le calcul parallèle de l'onglet « Optimisation PSV/RRQ » démarre et se termine (Web Workers); le dossier de données est toujours `%APPDATA%\Decumulation` (données de base et préférences conservées); l'installateur s'installe, se désinstalle et le MSI se met à jour sans doublon.
+
 ## Structure
 - `src/engine/types.ts` : modèle de données (scénario, résultats)
 - `src/engine/tax.ts` : impôt fédéral + Québec du ménage : crédits d'âge et de retraite, transfert des crédits inutilisés, fractionnement optimisé
@@ -42,7 +58,7 @@ Lancez d'abord `npm install` et gardez le `package-lock.json` qu'il crée : la C
 - `src/engine/compare.ts` : compare et classe les stratégies de retrait
 - `examples/` : exemple exécutable
 - `ui/` : interface (HTML, CSS, TypeScript sans framework) : `model.ts` (formulaire vers scénario, validation, fichiers), `form.ts`, `charts.ts` (SVG), `tables.ts`, `csv.ts`, `compute.ts` + `worker.ts` (calculs hors du fil de l'interface), `main.ts` (branchement)
-- `electron/` : fenêtre, boîtes de dialogue Ouvrir/Enregistrer (`main.ts`) et passerelle sécurisée (`preload.ts`)
+- `electron/` : fenêtre, boîtes de dialogue Ouvrir/Enregistrer (`main.ts`), mémoire du dernier dossier utilisé (`dialog-dir.ts`, testée sans Electron) et passerelle sécurisée (`preload.ts`)
 - `scripts/build.mjs` : assemble `dist/` avec esbuild
 - `src/engine/data/tax-2026.json` : table fiscale 2026 (voir `_note` pour les valeurs à valider)
 
