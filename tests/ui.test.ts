@@ -4,7 +4,7 @@ import { runProjection } from "../src/index";
 import type { StrategySummary, TaxYearTable } from "../src/index";
 import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, parseNumber, strategyToForm, toScenario } from "../ui/src/model";
 import { planToCsv } from "../ui/src/csv";
-import { balancesChart, sourcesChart, sourcesData } from "../ui/src/charts";
+import { INCOME_LEGEND, balancesChart, sourcesChart, sourcesData } from "../ui/src/charts";
 import { strategiesTable, yearTable } from "../ui/src/tables";
 import { comparePanel } from "../ui/src/compare-view";
 import { renderForm } from "../ui/src/form";
@@ -15,8 +15,8 @@ import { compareLongevity } from "../src/index";
 import { summarize } from "../src/index";
 import { ALL_FREE, benefitRanges, choiceKey, currentChoice, enumerateChoices, evaluateChoices, rankResults } from "../src/index";
 import type { BenefitChoice, ChoiceResult, OptimizationResult, Scenario } from "../src/index";
-import { RRQ_MAX_AT_65, applyBenefitChoice, benefitHint, extraExpenseHint, newExtraExpense, newProperty, principalResidenceCount, propertyHint, CAPITAL_GAINS_INCLUSION } from "../ui/src/model";
-import type { ExtraExpenseForm, FormState, PropertyForm } from "../ui/src/model";
+import { RRQ_MAX_AT_65, applyBenefitChoice, benefitHint, extraExpenseHint, incomeHint, newExtraExpense, newIncome, newProperty, principalResidenceCount, propertyHint, CAPITAL_GAINS_INCLUSION } from "../ui/src/model";
+import type { ExtraExpenseForm, FormState, IncomeForm, PropertyForm } from "../ui/src/model";
 import { fmtMoney } from "../ui/src/format";
 import { choiceText, durationText, estimateSeconds, optionRows, plannedCount, progressText, resultsTable, verdictHtml } from "../ui/src/optimize-view";
 import { OptimizationCancelled, chunkChoices, runChoices, workerCount } from "../ui/src/optimize-run";
@@ -135,8 +135,8 @@ describe("export et affichage", () => {
     expect(csv.trim().split("\r\n").length).toBe(1 + rows.length * 2);
     expect(has(csv, '"<b>""Alex""</b>"')).toBe(true); // guillemets échappés
     const t = parseCsv(csv);
-    expect(t.headers.length).toBe(29);
-    expect(new Set(t.rows.map((r) => r.length))).toEqual(new Set([29]));
+    expect(t.headers.length).toBe(31);
+    expect(new Set(t.rows.map((r) => r.length))).toEqual(new Set([31]));
     expect(t.col(t.rows[0], "Indice d'inflation (départ = 1)")).toBe("1,0000");                   // indice d'inflation de l'année de départ
     expect(t.col(t.rows[0], "Taux marginal (%)")).toBe((rows[0].spouses[0].marginalRate * 100).toFixed(2).replace(".", ","));
     expect(t.col(t.rows[2], "Indice d'inflation (départ = 1)")).toBe("1,0200");
@@ -1349,7 +1349,7 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
   };
   const withSale = (spending = "100000") => sc(spending, (f) => { f.properties = [{ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000" }]; });
   /** Toutes les colonnes possibles du tableau : une vente d'immeuble et une dépense supplémentaire. */
-  const withAll = () => sc("100000", (f) => { f.properties = [{ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000" }]; f.extraExpenses = [{ label: "Voiture", year: "2029", amount: "40000" }]; });
+  const withAll = () => sc("100000", (f) => { f.properties = [{ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000" }]; f.extraExpenses = [{ label: "Voiture", year: "2029", amount: "40000" }]; f.spouses[0].incomes = [{ label: "Salaire", amount: "60000", frequency: "annual", taxable: true, startYear: "2027", endYear: "2029", indexation: "3", year: "2027" }, { label: "Héritage", amount: "30000", frequency: "once", taxable: false, startYear: "2026", endYear: "", indexation: "2", year: "2028" }]; });
   // Correspondance entre les colonnes du tableau et celles du CSV (le CSV garde des libellés complets).
   const CSV_NAME: Record<string, string> = {
     "Année": "Année", "Âges": "Âge", "Rentes de régimes": "Rente de régime de retraite", "RRQ": "RRQ", "PSV": "PSV",
@@ -1357,7 +1357,7 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
     "Vente d'immeubles": "Vente d'immeubles", "Gain en capital imposable": "Gain en capital imposable",
     "Cotisation CELI": "Cotisation CELI", "Cotisation non enr.": "Cotisation non enregistré", "PSV récupérée": "Récupération de la PSV",
     "Pension fractionnée": "Fractionnement (reçu + / cédé −)", "Revenu imposable": "Revenu imposable", "Taux marginal": "Taux marginal (%)", "Impôt": "Impôt",
-    "Dépenses visées": "Dépenses visées", "Dépenses supp.": "Dépenses supp.", "Manque": "Manque", "Solde REER/FERR": "Solde REER/FERR", "Solde CELI": "Solde CELI", "Solde non enr.": "Solde non enregistré",
+    "Revenus imposables": "Revenus imposables", "Revenus non imposables": "Revenus non imposables", "Dépenses visées": "Dépenses visées", "Dépenses supp.": "Dépenses supp.", "Manque": "Manque", "Solde REER/FERR": "Solde REER/FERR", "Solde CELI": "Solde CELI", "Solde non enr.": "Solde non enregistré",
   };
 
   it("tableau : l'ordre des colonnes, sans vente d'immeubles", () => {
@@ -1374,11 +1374,11 @@ describe("colonnes : tableau et CSV dans le même ordre", () => {
     expect(h.slice(5, 12)).toEqual(["Retraits REER/FERR", "Retraits CELI", "Retraits non enr.", "Vente d'immeubles", "Gain en capital imposable", "Cotisation CELI", "Cotisation non enr."]);
     expect(h.indexOf("Impôt")).toBe(h.indexOf("Taux marginal") + 1);          // l'impôt suit le taux marginal
   });
-  it("CSV : l'ordre exact des 29 colonnes", () => {
+  it("CSV : l'ordre exact des 31 colonnes", () => {
     const { scenario, rows } = sc("100000");
     expect(parseCsv(planToCsv(scenario, rows)).headers).toEqual([
       "Année", "Conjoint", "Âge", "En vie", "Rente de régime de retraite", "RRQ", "PSV", "Retraits REER/FERR", "Retraits CELI", "Retraits non enregistré",
-      "Rendement imposable non enregistré", "Vente d'immeubles", "Gain en capital imposable", "Espace CELI", "Cotisation CELI", "Cotisation non enregistré", "Récupération de la PSV",
+      "Rendement imposable non enregistré", "Vente d'immeubles", "Gain en capital imposable", "Revenus imposables", "Revenus non imposables", "Espace CELI", "Cotisation CELI", "Cotisation non enregistré", "Récupération de la PSV",
       "Fractionnement (reçu + / cédé −)", "Revenu imposable", "Taux marginal (%)", "Impôt", "Dépenses visées", "Dépenses supp.", "Part des dépenses (%)", "Manque",
       "Solde REER/FERR", "Solde CELI", "Solde non enregistré", "Indice d'inflation (départ = 1)",
     ]);
@@ -1722,8 +1722,8 @@ describe("espace CELI : colonne du CSV seulement", () => {
     const { scenario, rows } = sc();
     const h = parseCsv(planToCsv(scenario, rows)).headers;
     expect(h.indexOf("Cotisation CELI")).toBe(h.indexOf("Espace CELI") + 1);
-    expect(h.indexOf("Espace CELI")).toBe(h.indexOf("Gain en capital imposable") + 1);
-    expect(h.length).toBe(29);
+    expect(h.indexOf("Espace CELI")).toBe(h.indexOf("Revenus non imposables") + 1);              // après les revenus, collé à la cotisation
+    expect(h.length).toBe(31);
   });
   it("il n'est pas dans le tableau du Détail annuel, même avec toutes les colonnes possibles", () => {
     const { scenario, rows } = sc((f) => { withSale(f); f.extraExpenses = [{ label: "Voiture", year: "2029", amount: "40000" }]; });
@@ -1783,5 +1783,249 @@ describe("espace CELI : colonne du CSV seulement", () => {
     const { scenario, rows } = sc((f) => { f.spouses[0].celiRoom = "0"; f.spouses[1].celiRoom = "0"; f.assumptions.celiAnnualLimit = "0"; });
     const t = parseCsv(planToCsv(scenario, rows));
     expect(t.rows.every((l) => t.col(l, "Espace CELI") === "0")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("revenus des conjoints : formulaire et scénario", () => {
+  const inc = (o: Partial<IncomeForm> = {}): IncomeForm => ({ label: "Salaire", amount: "60000", frequency: "annual", taxable: true, startYear: "2027", endYear: "2029", indexation: "3", year: "2027", ...o });
+  const lump = (o: Partial<IncomeForm> = {}): IncomeForm => inc({ label: "Héritage", amount: "300000", frequency: "once", taxable: false, year: "2028", ...o });
+  const withIncomes = (a: IncomeForm[], b: IncomeForm[] = []): FormState => { const f = defaultForm(); f.spouses[0].incomes = a; f.spouses[1].incomes = b; return f; };
+  const errorsOf = (f: FormState) => toScenario(f).errors;
+  const plain = (t: string) => t.replace(/[\u00a0\u202f]/g, " ").replace(/&#39;/g, "'");
+
+  it("par défaut : aucun revenu, et les conjoints du scénario n'ont pas de champ « otherIncomes »", () => {
+    const f = defaultForm();
+    expect(f.spouses.map((s) => s.incomes)).toEqual([[], []]);
+    expect(toScenario(f).scenario!.spouses.some((s) => "otherIncomes" in s)).toBe(false);
+  });
+  it("un nouveau revenu : annuel, imposable, dès le début du plan, indexé de 2 %, de montant nul — valide et sans effet", () => {
+    expect(newIncome("2026")).toEqual({ label: "", amount: "0", frequency: "annual", taxable: true, startYear: "2026", endYear: "", indexation: "2", year: "2026" });
+    expect(newIncome("2030").startYear).toBe("2030");
+    expect(newIncome("").startYear).toBe("2026");
+    const r = toScenario(withIncomes([newIncome()]));
+    expect(r.errors).toEqual([]);
+    expect(JSON.stringify(runProjection(r.scenario!, tax))).toBe(JSON.stringify(runProjection(toScenario(defaultForm()).scenario!, tax)));
+  });
+  it("convertit un revenu annuel et un revenu ponctuel, chacun chez le bon conjoint", () => {
+    const sc = toScenario(withIncomes([inc(), lump({ label: "" })], [inc({ label: "  Location  ", amount: "12 000,50", endYear: "", taxable: false, indexation: "-5" })])).scenario!;
+    expect(sc.spouses[0].otherIncomes).toEqual([
+      { label: "Salaire", amount: 60000, taxable: true, frequency: "annual", startYear: 2027, endYear: 2029, indexation: 0.03 },
+      { label: "Revenu 2", amount: 300000, taxable: false, frequency: "once", year: 2028 },
+    ]);
+    expect(sc.spouses[1].otherIncomes).toEqual([{ label: "Location", amount: 12000.5, taxable: false, frequency: "annual", startYear: 2027, indexation: -0.05 }]);       // fin vide : pas d'année de fin
+    expect("endYear" in sc.spouses[1].otherIncomes![0]).toBe(false);
+  });
+  it("un revenu annuel qui commence avant le début du plan est refusé, avec l'explication", () => {
+    expect(errorsOf(withIncomes([inc({ startYear: "2025" })]))).toEqual(["Alex : revenu 1 (Salaire), année de début 2025 : elle doit être à partir du début du plan (2026). Pour un revenu déjà en cours, entrez l'année de départ du plan et le montant actuel."]);
+    expect(errorsOf(withIncomes([inc({ startYear: "2026" })]))).toEqual([]);
+  });
+  it("un revenu ponctuel doit avoir lieu à partir du début du plan", () => {
+    expect(errorsOf(withIncomes([lump({ year: "2020" })])).some((x) => x.includes("Alex : revenu 1 (Héritage), année 2020 : elle doit être à partir du début du plan (2026)"))).toBe(true);
+    expect(errorsOf(withIncomes([lump({ year: "2026" })]))).toEqual([]);
+  });
+  it("l'année de fin doit être au moins l'année de début; vide, elle vaut la fin du plan", () => {
+    expect(errorsOf(withIncomes([inc({ endYear: "2026" })]))).toEqual(["Alex : revenu 1 (Salaire), année de fin 2026 : elle doit être au moins l'année de début (2027)."]);
+    expect(errorsOf(withIncomes([inc({ endYear: "2027" })]))).toEqual([]);
+    expect(errorsOf(withIncomes([inc({ endYear: "" })]))).toEqual([]);
+  });
+  it("refuse un montant manquant ou négatif, une indexation hors de −20 % à 20 %, des années non entières — en nommant le conjoint et le revenu", () => {
+    expect(errorsOf(withIncomes([inc({ amount: "" })]))).toEqual(["Alex : revenu 1 (Salaire), montant : entrez une valeur."]);
+    expect(errorsOf(withIncomes([inc({ amount: "-5" })])).some((x) => x.includes("montant"))).toBe(true);
+    expect(errorsOf(withIncomes([inc({ indexation: "25" })])).some((x) => x.includes("indexation"))).toBe(true);
+    expect(errorsOf(withIncomes([inc({ indexation: "-25" })])).some((x) => x.includes("indexation"))).toBe(true);
+    expect(errorsOf(withIncomes([inc({ indexation: "-20" })]))).toEqual([]);
+    expect(errorsOf(withIncomes([inc({ startYear: "2027,5" })])).some((x) => x.includes("année de début : entrez un nombre entier"))).toBe(true);
+    expect(errorsOf(withIncomes([], [inc({ label: "", amount: "" })]))).toEqual(["Sam : revenu 1, montant : entrez une valeur."]);
+  });
+  it("seuls les champs de la fréquence choisie sont vérifiés", () => {
+    expect(errorsOf(withIncomes([lump({ startYear: "abc", endYear: "xyz", indexation: "nul" })]))).toEqual([]);
+    expect(errorsOf(withIncomes([inc({ year: "abc" })]))).toEqual([]);
+  });
+
+  // ---- aperçu
+  it("aperçu d'un revenu annuel : premier et dernier montants, total dans le plan et nature fiscale", () => {
+    const t = plain(incomeHint(withIncomes([inc()]), 0, 0));
+    expect(t).toBe(`${plain(fmtMoney(60000))} en 2027, ${plain(fmtMoney(63654))} en 2029; ${plain(fmtMoney(185454))} au total dans le plan; imposable, comme un salaire (non fractionnable).`);
+  });
+  it("aperçu sans année de fin : jusqu'à la fin du plan (2057); revenu non imposable", () => {
+    let total = 0; for (let y = 2027; y <= 2057; y++) total += 12000 * Math.pow(1.02, y - 2027);
+    const t = plain(incomeHint(withIncomes([inc({ amount: "12000", endYear: "", indexation: "2", taxable: false })]), 0, 0));
+    expect(t).toContain(`${plain(fmtMoney(12000))} en 2027, ${plain(fmtMoney(12000 * Math.pow(1.02, 30)))} en 2057`);
+    expect(t).toContain(`${plain(fmtMoney(total))} au total dans le plan; non imposable.`);
+  });
+  it("aperçu d'un revenu ponctuel : montant en dollars de son année", () => {
+    expect(plain(incomeHint(withIncomes([lump()]), 0, 0))).toBe(`Reçu en 2028 : ${plain(fmtMoney(300000))} (dollars de 2028), non imposable.`);
+    expect(plain(incomeHint(withIncomes([lump({ taxable: true })]), 0, 0))).toContain("imposable, comme un salaire (non fractionnable)");
+  });
+  it("aperçu : montant nul sans effet; avertissements après la fin du plan ou après le décès prévu; vide si invalide", () => {
+    expect(incomeHint(withIncomes([inc({ amount: "0" })]), 0, 0)).toContain("n'a aucun effet");
+    expect(incomeHint(withIncomes([lump({ amount: "0" })]), 0, 0)).toContain("n'a aucun effet");
+    expect(plain(incomeHint(withIncomes([lump({ year: "2060" })]), 0, 0))).toContain("après la fin du plan (2057)");
+    expect(plain(incomeHint(withIncomes([inc({ startYear: "2060", endYear: "" })]), 0, 0))).toContain("commence après la fin du plan (2057)");
+    const f = withIncomes([lump({ year: "2031" }), inc({ startYear: "2031", endYear: "" }), inc({ startYear: "2027", endYear: "2040" })]);
+    f.spouses[0].deathAge = "70";                                    // né en 1960 : décès fin 2030
+    expect(plain(incomeHint(f, 0, 0))).toContain("après le décès prévu (2030)");
+    expect(plain(incomeHint(f, 0, 1))).toContain("commence après le décès prévu (2030)");
+    expect(plain(incomeHint(f, 0, 2))).toContain("Arrêté au décès prévu (2030)");
+    for (const bad of [{ amount: "" }, { amount: "abc" }, { amount: "-3" }, { startYear: "" }, { startYear: "2020" }, { endYear: "2020" }, { indexation: "x" }]) expect(incomeHint(withIncomes([inc(bad)]), 0, 0)).toBe("");
+    expect(incomeHint(withIncomes([lump({ year: "" })]), 0, 0)).toBe("");
+    expect(incomeHint(withIncomes([]), 0, 3)).toBe("");
+  });
+
+  // ---- formulaire
+  it("chaque conjoint a une section « Revenus » avec son message vide et son bouton d'ajout", () => {
+    const html = renderForm(defaultForm(), new Set(["spouse0", "spouse1"]));
+    expect((html.match(/<legend>Revenus<\/legend>/g) ?? []).length).toBe(2);
+    expect((html.match(/Aucun revenu : ajoutez un salaire/g) ?? []).length).toBe(2);
+    expect(html).toContain('data-action="add-income" data-spouse="0"');
+    expect(html).toContain('data-action="add-income" data-spouse="1"');
+    expect(html.indexOf("Rentes de régimes à prestations déterminées")).toBeLessThan(html.indexOf("<legend>Revenus</legend>"));       // après les rentes de régime
+    expect(plain(html)).toContain("Un revenu cesse au décès de ce conjoint");
+  });
+  it("revenu annuel : fréquence, montant, case imposable, début, fin et indexation; pas d'année ponctuelle", () => {
+    const html = renderForm(withIncomes([inc()]), new Set(["spouse0"]));
+    for (const k of ["label", "frequency", "amount", "taxable", "startYear", "endYear", "indexation"]) expect(html).toContain(`data-path="spouses.0.incomes.0.${k}"`);
+    expect(html).not.toContain('data-path="spouses.0.incomes.0.year"');
+    expect(html).toContain('<option value="annual" selected>Annuel</option><option value="once">Ponctuel</option>');
+    expect(plain(html)).toContain("Montant de l'année de début");
+    expect(/data-path="spouses\.0\.incomes\.0\.taxable" checked>/.test(html)).toBe(true);
+    expect(html).toContain('data-action="remove-income" data-spouse="0" data-index="0"');
+    expect(/data-income-hint="0\.0"[^>]*>[^<]*imposable/.test(plain(html))).toBe(true);
+  });
+  it("revenu ponctuel : seulement l'année; case imposable décochée selon l'état; le changement de fréquence réaffiche le formulaire", () => {
+    const html = renderForm(withIncomes([], [lump()]), new Set(["spouse1"]));
+    expect(html).toContain('data-path="spouses.1.incomes.0.year"');
+    for (const k of ["startYear", "endYear", "indexation"]) expect(html).not.toContain(`data-path="spouses.1.incomes.0.${k}"`);
+    expect(html).toContain('<option value="annual">Annuel</option><option value="once" selected>Ponctuel</option>');
+    expect(plain(html)).toContain("En dollars de l'année du revenu");
+    expect(/data-path="spouses\.1\.incomes\.0\.taxable"( checked)?>/.exec(html)![1]).toBe(undefined);
+    expect(html).toContain('data-path="spouses.1.incomes.0.frequency" data-rerender="1"');
+  });
+  it("les valeurs saisies sont échappées", () => {
+    const html = renderForm(withIncomes([inc({ label: "<img src=x onerror=1>" })]), new Set(["spouse0"]));
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img src=x");
+  });
+
+  // ---- changements, fichiers
+  it("le suivi des changements : ajout, retrait et champs, avec le prénom et le numéro du revenu", () => {
+    const a = defaultForm(), b = JSON.parse(JSON.stringify(a)) as FormState;
+    b.spouses[0].incomes = [inc()];
+    expect(describeChanges(a, b)).toEqual(["Alex : revenu 1 ajouté"]);
+    expect(describeChanges(b, a)).toEqual(["Alex : revenu 1 retiré"]);
+    const c = JSON.parse(JSON.stringify(b)) as FormState;
+    c.spouses[0].incomes[0].amount = "65000"; c.spouses[0].incomes[0].frequency = "once"; c.spouses[0].incomes[0].taxable = false;
+    expect(describeChanges(b, c)).toEqual(["Alex, revenu 1 (montant) : 60000 → 65000", "Alex, revenu 1 (fréquence) : annuel → ponctuel", "Alex, revenu 1 (imposable) : oui → non"]);
+    expect([...changedPaths(b, c)].sort()).toEqual(["spouses.0.incomes.0.amount", "spouses.0.incomes.0.frequency", "spouses.0.incomes.0.taxable"]);
+    const d = JSON.parse(JSON.stringify(a)) as FormState; d.spouses[1].incomes = [lump()];
+    expect(describeChanges(a, d)).toEqual(["Sam : revenu 1 ajouté"]);
+  });
+  it("l'aller-retour par fichier conserve les revenus; un ancien fichier s'ouvre sans revenu", () => {
+    const f = withIncomes([inc(), lump()], [inc({ taxable: false })]);
+    expect(fileFromJson(fileToJson(f, null)).form.spouses.map((s) => s.incomes)).toEqual(f.spouses.map((s) => s.incomes));
+    const old = JSON.parse(JSON.stringify(defaultForm())); delete old.spouses[0].incomes; delete old.spouses[1].incomes;
+    expect(formFromJson(JSON.stringify({ form: old })).spouses.map((s) => s.incomes)).toEqual([[], []]);
+  });
+  it("une fréquence invalide devient « annuel »; les champs manquants reprennent leur défaut", () => {
+    const odd = JSON.parse(JSON.stringify(withIncomes([inc()]))); odd.spouses[0].incomes[0].frequency = "n'importe quoi";
+    expect(formFromJson(JSON.stringify({ form: odd })).spouses[0].incomes[0].frequency).toBe("annual");
+    const partial = JSON.parse(JSON.stringify(defaultForm())); partial.spouses[1].incomes = [{ label: "X", amount: 5 }];
+    expect(formFromJson(JSON.stringify({ form: partial })).spouses[1].incomes[0]).toEqual({ label: "X", amount: "5", frequency: "annual", taxable: true, startYear: "2026", endYear: "", indexation: "2", year: "2026" });
+  });
+});
+
+describe("revenus des conjoints : résultats", () => {
+  const inc = (o: Partial<IncomeForm> = {}): IncomeForm => ({ label: "Salaire", amount: "60000", frequency: "annual", taxable: true, startYear: "2027", endYear: "2029", indexation: "3", year: "2027", ...o });
+  const lump = (o: Partial<IncomeForm> = {}): IncomeForm => inc({ label: "Héritage", amount: "300000", frequency: "once", taxable: false, year: "2028", ...o });
+  const sc = (a: IncomeForm[], b: IncomeForm[] = [], mutate?: (f: FormState) => void) => {
+    const f = defaultForm(); f.spouses[0].incomes = a; f.spouses[1].incomes = b; mutate?.(f);
+    const scenario = toScenario(f).scenario!;
+    return { scenario, rows: runProjection(scenario, tax) };
+  };
+
+  it("tableau : sans revenu, aucune colonne ajoutée", () => {
+    const { scenario, rows } = sc([]);
+    const h = parseYearTable(yearTable(scenario, rows, false)).headers;
+    expect(h).not.toContain("Revenus imposables");
+    expect(h).not.toContain("Revenus non imposables");
+    expect(h.length).toBe(20);
+  });
+  it("tableau : avec des revenus, deux colonnes juste avant « Cotisation CELI » (après les ventes d'immeubles, s'il y en a)", () => {
+    const { scenario, rows } = sc([inc(), lump()]);
+    const h = parseYearTable(yearTable(scenario, rows, false)).headers;
+    expect(h.length).toBe(22);
+    const i = h.indexOf("Revenus imposables");
+    expect(h.slice(i - 1, i + 3)).toEqual(["Retraits non enr.", "Revenus imposables", "Revenus non imposables", "Cotisation CELI"]);
+    const f = sc([inc()], [], (form) => { form.properties = [{ label: "Chalet", owner: "both", principalResidence: false, purchaseYear: "2000", purchasePrice: "200000", saleYear: "2030", salePrice: "600000" }]; });
+    const h2 = parseYearTable(yearTable(f.scenario, f.rows, false)).headers;
+    expect(h2.slice(h2.indexOf("Vente d'immeubles"), h2.indexOf("Cotisation CELI") + 1)).toEqual(["Vente d'immeubles", "Gain en capital imposable", "Revenus imposables", "Revenus non imposables", "Cotisation CELI"]);
+  });
+  it("tableau : montants du ménage et de chaque conjoint, par type, dans l'année du revenu seulement", () => {
+    const { scenario, rows } = sc([inc()], [lump({ amount: "40000", year: "2029" })]);
+    const t = parseYearTable(yearTable(scenario, rows, false));
+    const iT = t.headers.indexOf("Revenus imposables") - 2, iN = t.headers.indexOf("Revenus non imposables") - 2;
+    const [parent, a, b] = t.rows.filter((r) => r.year === 2028);
+    expect([parent.cells[iT], a.cells[iT], b.cells[iT]]).toEqual(["61 800", "61 800", "0"]);       // 60 000 $ en 2027, +3 % en 2028
+    expect([parent.cells[iN], a.cells[iN], b.cells[iN]]).toEqual(["0", "0", "0"]);
+    const [p29, a29, b29] = t.rows.filter((r) => r.year === 2029);
+    expect([p29.cells[iN], a29.cells[iN], b29.cells[iN]]).toEqual(["40 000", "0", "40 000"]);      // ponctuel : dollars de son année, sans indexation
+    const [p26] = t.rows.filter((r) => r.year === 2026);
+    expect(p26.cells[iT]).toBe("0");
+    const [p30] = t.rows.filter((r) => r.year === 2030);
+    expect(p30.cells[iT]).toBe("0");                                                                // le salaire a pris fin en 2029
+  });
+  it("tableau : en dollars constants, un revenu annuel est ramené aux dollars de départ, un ponctuel aussi", () => {
+    const { scenario, rows } = sc([inc()], [lump({ amount: "40000", year: "2029" })]);
+    const t = parseYearTable(yearTable(scenario, rows, true));
+    const iT = t.headers.indexOf("Revenus imposables") - 2, iN = t.headers.indexOf("Revenus non imposables") - 2;
+    expect(Math.abs(digitsOf(t.rows.find((r) => !r.sub && r.year === 2027)!.cells[iT]) - Math.round(60000 / 1.02))).toBeLessThanOrEqual(1);
+    expect(Math.abs(digitsOf(t.rows.find((r) => !r.sub && r.year === 2029)!.cells[iN]) - Math.round(40000 / Math.pow(1.02, 3)))).toBeLessThanOrEqual(1);
+  });
+  it("tableau : après le décès, la ligne du conjoint décédé affiche « — » et le revenu cesse", () => {
+    const { scenario, rows } = sc([inc({ endYear: "" })], [], (f) => { f.spouses[0].deathAge = "70"; });
+    const t = parseYearTable(yearTable(scenario, rows, false));
+    const iT = t.headers.indexOf("Revenus imposables") - 2;
+    const [parent, dead] = t.rows.filter((r) => r.year === 2032);
+    expect(dead.cells[iT]).toBe("—");
+    expect(parent.cells[iT]).toBe("0");
+    expect(t.rows.find((r) => !r.sub && r.year === 2030)!.cells[iT]).not.toBe("0");
+  });
+  it("CSV : « Revenus imposables » et « Revenus non imposables » juste avant « Espace CELI », qui reste collé à « Cotisation CELI »", () => {
+    const { scenario, rows } = sc([inc()]);
+    const h = parseCsv(planToCsv(scenario, rows)).headers;
+    expect(h.length).toBe(31);
+    expect(h.slice(h.indexOf("Revenus imposables"), h.indexOf("Revenus imposables") + 4)).toEqual(["Revenus imposables", "Revenus non imposables", "Espace CELI", "Cotisation CELI"]);
+    expect(h.indexOf("Revenus imposables")).toBe(h.indexOf("Gain en capital imposable") + 1);
+  });
+  it("CSV : les montants de chaque conjoint, par type; les colonnes existent toujours, à zéro sans revenu", () => {
+    const { scenario, rows } = sc([inc(), lump({ amount: "7000", year: "2028", taxable: true })], [lump({ amount: "40000", year: "2029" })]);
+    const t = parseCsv(planToCsv(scenario, rows));
+    const row = (year: number, who: string) => t.rows.find((l) => t.col(l, "Année") === String(year) && t.col(l, "Conjoint") === who)!;
+    expect(t.col(row(2028, "Alex"), "Revenus imposables")).toBe("68800");                            // 61 800 $ de salaire + 7 000 $ ponctuels imposables
+    expect(t.col(row(2028, "Alex"), "Revenus non imposables")).toBe("0");
+    expect(t.col(row(2029, "Sam"), "Revenus non imposables")).toBe("40000");
+    expect(t.col(row(2029, "Sam"), "Revenus imposables")).toBe("0");
+    expect(t.col(row(2027, "Sam"), "Revenus imposables")).toBe("0");
+    const none = sc([]);
+    const z = parseCsv(planToCsv(none.scenario, none.rows));
+    expect(z.rows.every((l) => z.col(l, "Revenus imposables") === "0" && z.col(l, "Revenus non imposables") === "0")).toBe(true);
+  });
+  it("graphique : les revenus sont une source d'argent (dans leurs années seulement) et l'argent est conservé", () => {
+    const { scenario, rows } = sc([inc()], [lump({ amount: "40000", year: "2029" })]);
+    const d = sourcesData(scenario, rows, false);
+    const key = d.keys.find((k) => k.cls === "s-income")!;
+    expect(key.name).toBe("Revenus (travail et autres)");
+    const k = (year: number) => rows.findIndex((y) => y.year === year);
+    expect(key.v(rows[k(2028)])).toBeCloseTo(61800, 6);
+    expect(key.v(rows[k(2029)])).toBeCloseTo(63654 + 40000, 6);
+    expect(key.v(rows[k(2030)])).toBe(0);
+    for (const real of [false, true]) {
+      const dd = sourcesData(scenario, rows, real);
+      rows.forEach((_, j) => expect(Math.abs(dd.stacks[j] + dd.shortfall[j] - dd.outflow[j] - dd.contributions[j])).toBeLessThan(1e-6));
+    }
+    expect(sourcesChart(scenario, rows, false)).toContain('class="s-income"');
+    expect(sourcesChart(sc([]).scenario, sc([]).rows, false)).not.toContain('class="s-income"');
+    expect(INCOME_LEGEND).toEqual({ cls: "s-income", name: "Revenus (travail et autres)" });
   });
 });

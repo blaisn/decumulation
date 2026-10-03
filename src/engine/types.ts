@@ -79,6 +79,19 @@ export interface PublicBenefit {
   startAge: number;
 }
 
+/**
+ * Revenu d'un conjoint autre que les rentes de régime, la RRQ et la PSV : salaire, travail autonome, location, héritage...
+ * - `taxable` : revenu ordinaire (comme un salaire), qui s'ajoute au revenu imposable et n'est pas admissible au fractionnement;
+ *   sans cotisations (RRQ, assurance-emploi, RQAP) ni déduction pour travailleur. Sinon, argent non imposable.
+ * - annuel : `amount` est le montant de l'année `startYear`, indexé ensuite de `indexation` par an jusqu'à `endYear` (absent : fin du plan).
+ * - ponctuel : `amount` est en dollars courants de l'année `year`, sans indexation.
+ * Un revenu cesse au décès de son conjoint.
+ */
+interface OtherIncomeBase { label: string; amount: number; taxable: boolean }
+export type OtherIncome =
+  | (OtherIncomeBase & { frequency: "annual"; startYear: number; endYear?: number; indexation: number })
+  | (OtherIncomeBase & { frequency: "once"; year: number });
+
 export interface SpouseInput {
   name: string;
   birthYear: number;
@@ -90,6 +103,7 @@ export interface SpouseInput {
   nonRegistered?: number; // compte non enregistré (défaut 0)
   celiRoom?: number; // droits de cotisation CELI inutilisés au 1er janvier de startYear (défaut 0)
   deathAge?: number; // âge au décès, en fin d'année (absent = vit jusqu'à la fin du plan)
+  otherIncomes?: OtherIncome[]; // salaire, location, héritage... : aucun par défaut
 }
 
 export interface Assumptions {
@@ -158,6 +172,8 @@ export interface SpouseYear {
   celiBalanceEnd: number;
   nonRegIncome: number; // part imposable du rendement du compte non enregistré (incluse dans le revenu imposable)
   nonRegWithdrawal: number;
+  otherTaxable: number; // revenus imposables autres que les rentes, la RRQ et la PSV (salaire...) : revenu ordinaire, non fractionnable
+  otherNonTaxable: number; // revenus non imposables (héritage...) : de l'argent reçu
   celiRoom: number; // espace CELI : droits de cotisation disponibles cette année, avant les cotisations (reste des années précédentes + plafond annuel indexé + retraits de l'année précédente; au départ, les droits saisis); 0 si décédé
   celiContribution: number;
   nonRegContribution: number;

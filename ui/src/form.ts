@@ -1,4 +1,4 @@
-import { STRATEGY_NAMES, benefitHint, extraExpenseHint, principalResidenceCount, propertyHint, shareComplement } from "./model";
+import { STRATEGY_NAMES, benefitHint, extraExpenseHint, incomeHint, principalResidenceCount, propertyHint, shareComplement } from "./model";
 import type { FormState, SpouseForm } from "./model";
 import { esc } from "./format";
 
@@ -28,6 +28,29 @@ function pensionRows(sp: SpouseForm, i: number): string {
       ${p.harmonization ? field("Montant de la pension à 65 ans", `${base}.amountAt65`, p.amountAt65, { suffix: "$", wide: true, placeholder: p.amount, hint: "Laissé vide : identique au montant annuel. Entrez la rente après harmonisation, pas le montant de la réduction." }) : ""}
     </div>
     <button type="button" class="link danger" data-action="remove-pension" data-spouse="${i}" data-index="${j}">Retirer cette rente</button></div>`;
+  }).join("");
+}
+
+/** Revenus d'un conjoint (salaire, location, héritage...) : un bloc par revenu, annuel ou ponctuel, imposable ou non. */
+function incomeRows(f: FormState, i: number): string {
+  const sp = f.spouses[i];
+  if (!sp.incomes.length) return `<p class="empty">Aucun revenu : ajoutez un salaire, un revenu de travail autonome, de location ou un héritage.</p>`;
+  return sp.incomes.map((r, j) => {
+    const b = `spouses.${i}.incomes.${j}`;
+    const once = r.frequency === "once";
+    return `<div class="income"><div class="grid pgrid">
+      ${textField("Description", `${b}.label`, r.label, { wide: true, placeholder: `Revenu ${j + 1}` })}
+      <label class="f"><span class="lab">Fréquence</span><select data-path="${b}.frequency" data-rerender="1"><option value="annual"${once ? "" : " selected"}>Annuel</option><option value="once"${once ? " selected" : ""}>Ponctuel</option></select></label>
+      ${field("Montant", `${b}.amount`, r.amount, { suffix: "$", hint: once ? "En dollars de l'année du revenu" : "Montant de l'année de début" })}
+      <label class="check wide"><input type="checkbox" data-path="${b}.taxable"${r.taxable ? " checked" : ""}><span>Imposable (comme un salaire : non fractionnable)</span></label>
+      ${once
+        ? field("Année", `${b}.year`, r.year, { hint: "À partir du début du plan" })
+        : `${field("Début", `${b}.startYear`, r.startYear, { hint: "Année; à partir du début du plan" })}
+      ${field("Fin", `${b}.endYear`, r.endYear, { placeholder: "fin du plan", hint: "Année; vide : jusqu'à la fin du plan" })}
+      ${field("Indexation", `${b}.indexation`, r.indexation, { suffix: "%", hint: "Par an, après l'année de début" })}`}
+      <p class="hint wide benefit" data-income-hint="${i}.${j}" aria-live="polite">${esc(incomeHint(f, i, j))}</p>
+    </div>
+    <button type="button" class="link danger" data-action="remove-income" data-spouse="${i}" data-index="${j}">Retirer ce revenu</button></div>`;
   }).join("");
 }
 
@@ -74,7 +97,8 @@ function shareField(first: SpouseForm, i: number): string {
   return `<label class="f wide"><span class="lab">Part des dépenses du couple dont il a la charge</span><span class="ctl"><input type="text" readonly aria-readonly="true" tabindex="-1" data-share-complement value="${esc(shareComplement(first.expenseShare))}"><span class="suf">%</span></span><span class="hint">100 % moins la part du premier conjoint (affichage seulement)</span></label>`;
 }
 
-function spouseSection(sp: SpouseForm, i: number, open: boolean, first: SpouseForm): string {
+function spouseSection(f: FormState, i: number, open: boolean): string {
+  const sp = f.spouses[i], first = f.spouses[0];
   const b = `spouses.${i}`;
   return `<details class="sec" data-sec="spouse${i}"${open ? " open" : ""}><summary><span data-title="${i}">${esc(sp.name.trim() || `Conjoint ${i + 1}`)}</span></summary><div class="body">
     <div class="grid">
@@ -102,6 +126,11 @@ function spouseSection(sp: SpouseForm, i: number, open: boolean, first: SpouseFo
       ${pensionRows(sp, i)}
       <button type="button" class="link" data-action="add-pension" data-spouse="${i}">Ajouter une rente</button>
     </fieldset>
+    <fieldset><legend>Revenus</legend>
+      <p class="note">Salaire, travail autonome, location, héritage... (les rentes de régime, la RRQ et la PSV se saisissent plus haut). Un revenu imposable s'ajoute au revenu imposable comme un salaire, sans cotisations ni déduction pour travailleur. Un revenu cesse au décès de ce conjoint.</p>
+      ${incomeRows(f, i)}
+      <button type="button" class="link" data-action="add-income" data-spouse="${i}">Ajouter un revenu</button>
+    </fieldset>
   </div></details>`;
 }
 
@@ -120,8 +149,8 @@ export function renderForm(f: FormState, openSecs: Set<string>): string {
     ${field("Rendement du REER/FERR", "assumptions.reerReturn", a.reerReturn, { suffix: "%" })}
     ${field("Rendement du CELI", "assumptions.celiReturn", a.celiReturn, { suffix: "%" })}
   </div></div></details>
-  ${spouseSection(f.spouses[0], 0, o("spouse0"), f.spouses[0])}
-  ${spouseSection(f.spouses[1], 1, o("spouse1"), f.spouses[0])}
+  ${spouseSection(f, 0, o("spouse0"))}
+  ${spouseSection(f, 1, o("spouse1"))}
   <details class="sec" data-sec="properties"${o("properties") ? " open" : ""}><summary>Immeubles${f.properties.length ? ` (${f.properties.length})` : ""}</summary><div class="body">
     <p class="note">Achetés avant le début du plan, sans hypothèque. À la vente, le produit est reçu dans l'année : il finance les dépenses, puis le surplus est placé au CELI et au compte non enregistré. Le gain en capital (imposable à 50 %) s'ajoute au revenu des propriétaires, sauf pour une résidence principale. Au décès d'un propriétaire, l'immeuble passe au conjoint survivant.</p>
     ${propertyRows(f)}

@@ -15,6 +15,7 @@ export function yearTable(s: Scenario, rows: YearResult[], real: boolean, expand
   const d = deflate(s, real);
   const sum = (y: YearResult, pick: (p: Sp) => number) => (y.spouses[0] ? pick(y.spouses[0]) + pick(y.spouses[1]) : 0);
   const extras = rows.some((y) => y.extraSpending > 0);      // colonne ajoutée seulement s'il y a une dépense supplémentaire dans le plan
+  const incomes = rows.some((y) => y.spouses.some((p) => p.otherTaxable + p.otherNonTaxable > 0));      // colonnes ajoutées seulement s'il y a un revenu dans le plan
   const sales = rows.some((y) => y.spouses[0].propertyProceeds + y.spouses[1].propertyProceeds > 0);      // colonnes ajoutées seulement si un immeuble est vendu
 
   // Une seule définition des colonnes sert à la ligne du ménage et à celle de chaque conjoint.
@@ -24,6 +25,7 @@ export function yearTable(s: Scenario, rows: YearResult[], real: boolean, expand
     col("Rentes de régimes", (p) => p.pensionIncome), col("RRQ", (p) => p.rrqIncome), col("PSV", (p) => p.psvIncome),
     col("Retraits REER/FERR", (p) => p.reerWithdrawal), col("Retraits CELI", (p) => p.celiWithdrawal), col("Retraits non enr.", (p) => p.nonRegWithdrawal),
     ...(sales ? [col("Vente d'immeubles", (p) => p.propertyProceeds), col("Gain en capital imposable", (p) => p.taxableCapitalGain)] : []),
+    ...(incomes ? [col("Revenus imposables", (p) => p.otherTaxable), col("Revenus non imposables", (p) => p.otherNonTaxable)] : []),
     col("Cotisation CELI", (p) => p.celiContribution), col("Cotisation non enr.", (p) => p.nonRegContribution),
     // De la récupération de la PSV à l'impôt, dans l'ordre du calcul : récupération et fractionnement, revenu imposable, taux marginal, impôt.
     col("PSV récupérée", (p) => p.psvClawback),

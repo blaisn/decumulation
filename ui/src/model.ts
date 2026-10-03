@@ -1,6 +1,6 @@
 import table2026 from "../../src/engine/data/tax-2026.json";
 import { psvFactor, rrqFactor } from "../../src/index";
-import type { BenefitChoice, CompareOptions, DbPension, ExtraExpense, Property, Scenario, SpouseInput, Strategy } from "../../src/index";
+import type { BenefitChoice, CompareOptions, DbPension, ExtraExpense, OtherIncome, Property, Scenario, SpouseInput, Strategy } from "../../src/index";
 import { fmtMoney } from "./format";
 
 // L'état du formulaire garde les valeurs telles que saisies (texte); la conversion se fait dans `toScenario`.
@@ -10,11 +10,21 @@ export interface PensionForm {
   harmonization: boolean; // harmonisation avec la RRQ à 65 ans (case à cocher)
   amountAt65: string; // montant à partir de 65 ans; vide = identique au montant annuel
 }
+/** Revenu d'un conjoint saisi dans le formulaire (salaire, location, héritage...). Annuel : montant de l'année de début, indexé; ponctuel : dollars de son année. */
+export interface IncomeForm {
+  label: string;
+  amount: string;
+  frequency: "annual" | "once";
+  taxable: boolean; // imposable : traité comme un salaire (revenu ordinaire, non fractionnable)
+  startYear: string; endYear: string; indexation: string; // annuel
+  year: string; // ponctuel
+}
 export interface SpouseForm {
   name: string; birthYear: string; deathAge: string; lifeExpectancy: string;
   reer: string; celi: string; celiRoom: string; nonReg: string;
   rrqAmount: string; rrqStartAge: string; psvAmount: string; psvStartAge: string;
   pensions: PensionForm[];
+  incomes: IncomeForm[];
   expenseShare?: string; // % des dépenses du couple dont ce conjoint a la charge : saisi pour le premier, déduit (100 − part) pour le second
 }
 export interface StrategyForm { kind: Strategy["kind"]; ceiling: string; usePsvThreshold: boolean; untilAge: string }
@@ -59,6 +69,7 @@ const spouse = (name: string, birthYear: string, pensionAmount: string, expenseS
   reer: "600000", celi: "90000", celiRoom: "40000", nonReg: "0",
   rrqAmount: "14000", rrqStartAge: "65", psvAmount: "8700", psvStartAge: "65",
   pensions: [pension("Régime de retraite", pensionAmount)],
+  incomes: [],
 });
 
 /** Valeurs d'exemple : un couple fictif, à remplacer par la situation réelle. */
@@ -119,6 +130,49 @@ export function newPension(): PensionForm { return pension("", "0"); }
 export function newProperty(startYear = "2026"): PropertyForm {
   const y = parseInt(startYear, 10);
   return { label: "", owner: "both", principalResidence: false, purchaseYear: String(Number.isFinite(y) ? y - 15 : 2011), purchasePrice: "", saleYear: "", salePrice: "" };
+}
+
+/** Nouveau revenu : annuel et imposable, à partir du début du plan, indexé de 2 %, de montant nul (sans effet tant qu'on ne le remplit pas). */
+export function newIncome(startYear = "2026"): IncomeForm {
+  return { label: "", amount: "0", frequency: "annual", taxable: true, startYear: startYear.trim() || "2026", endYear: "", indexation: "2", year: startYear.trim() || "2026" };
+}
+
+/**
+ * Aperçu d'un revenu : montants dans le plan et nature fiscale, ou avertissement (hors du plan, après le décès).
+ * Chaîne vide tant que les champs nécessaires ne sont pas valides.
+ */
+export function incomeHint(f: FormState, i: number, j: number): string {
+  const sp = f.spouses[i], r = sp?.incomes[j];
+  if (!r) return "";
+  const planStart = parseNumber(f.assumptions.startYear), amount = parseNumber(r.amount);
+  const births = f.spouses.map((s) => parseNumber(s.birthYear)), endAge = parseNumber(f.assumptions.endAge);
+  if (!Number.isFinite(planStart) || !Number.isFinite(amount) || amount < 0 || !births.every(Number.isFinite) || !Number.isFinite(endAge)) return "";
+  const lastYear = Math.max(...births) + endAge;
+  const death = parseNumber(sp.deathAge), deathYear = Number.isFinite(death) ? births[i] + death : Infinity;
+  const kind = r.taxable ? "imposable, comme un salaire (non fractionnable)" : "non imposable";
+  if (r.frequency === "once") {
+    const year = parseNumber(r.year);
+    if (!Number.isInteger(year) || year < planStart) return "";
+    if (amount === 0) return "Montant nul : ce revenu n'a aucun effet.";
+    const text = `Reçu en ${year} : ${fmtMoney(amount)} (dollars de ${year}), ${kind}.`;
+    if (year > lastYear) return `${text} Cette année est après la fin du plan (${lastYear}) : aucun effet.`;
+    if (year > deathYear) return `${text} Cette année est après le décès prévu (${deathYear}) : aucun effet.`;
+    return text;
+  }
+  const start = parseNumber(r.startYear), index = parseNumber(r.indexation) / 100;
+  const hasEnd = r.endYear.trim() !== "", end = hasEnd ? parseNumber(r.endYear) : Infinity;
+  if (!Number.isInteger(start) || start < planStart || !Number.isFinite(index) || (hasEnd && (!Number.isInteger(end) || end < start))) return "";
+  if (amount === 0) return "Montant nul : ce revenu n'a aucun effet.";
+  const last = Math.min(end, lastYear, deathYear);
+  if (start > last) return `Ce revenu commence après ${start > deathYear ? `le décès prévu (${deathYear})` : `la fin du plan (${lastYear})`} : aucun effet.`;
+  let total = 0;
+  for (let y = start; y <= last; y++) total += amount * Math.pow(1 + index, y - start);
+  let text = `${fmtMoney(amount)} en ${start}`;
+  if (last > start) text += `, ${fmtMoney(amount * Math.pow(1 + index, last - start))} en ${last}`;
+  text += `; ${fmtMoney(total)} au total dans le plan; ${kind}.`;
+  if (last === deathYear && last < Math.min(end, lastYear)) text += ` Arrêté au décès prévu (${deathYear}).`;
+  else if (hasEnd && end > lastYear) text += ` Le plan se termine en ${lastYear}.`;
+  return text;
 }
 
 /** Nouvelle dépense supplémentaire : cinq ans après le début du plan, montant nul (sans effet tant qu'on ne le remplit pas). */
@@ -231,6 +285,25 @@ export function toScenario(f: FormState): Parsed {
       nonRegistered: need(L("compte non enregistré"), s.nonReg, { min: 0 }),
       rrq: { annualAmount: need(L("rente RRQ annuelle"), s.rrqAmount, { min: 0 }), startAge: need(L("âge de début de la RRQ"), s.rrqStartAge, { int: true, min: 60, max: 72 }) },
       psv: { annualAmount: need(L("PSV annuelle"), s.psvAmount, { min: 0 }), startAge: need(L("âge de début de la PSV"), s.psvStartAge, { int: true, min: 65, max: 70 }) },
+      ...(s.incomes.length ? {
+        otherIncomes: s.incomes.map((r, j): OtherIncome => {
+          const Li = (x: string) => L(`revenu ${j + 1}${r.label.trim() ? ` (${r.label.trim()})` : ""}, ${x}`);
+          const label = r.label.trim() || `Revenu ${j + 1}`;
+          const amount = need(Li("montant"), r.amount, { min: 0 });
+          const early = (what: string, y: number) => { if (Number.isFinite(y) && startYear > 0 && y < startYear) errors.push(Li(`${what} ${y} : elle doit être à partir du début du plan (${startYear}). Pour un revenu déjà en cours, entrez l'année de départ du plan et le montant actuel.`)); };
+          if (r.frequency === "once") {
+            const year = need(Li("année"), r.year, { int: true, min: 1800, max: 2200 });
+            early("année", year);
+            return { label, amount, taxable: r.taxable, frequency: "once", year };
+          }
+          const start = need(Li("année de début"), r.startYear, { int: true, min: 1800, max: 2200 });
+          early("année de début", start);
+          const end = need(Li("année de fin"), r.endYear, { int: true, min: 1800, max: 2200, optional: true });
+          if (Number.isFinite(start) && Number.isFinite(end) && end < start) errors.push(Li(`année de fin ${end} : elle doit être au moins l'année de début (${start}).`));
+          const indexation = need(Li("indexation"), r.indexation, { min: -20, max: 20 }) / 100;
+          return { label, amount, taxable: r.taxable, frequency: "annual", startYear: start, ...(Number.isFinite(end) ? { endYear: end } : {}), indexation };
+        }),
+      } : {}),
       dbPensions: s.pensions.map((p, j): DbPension => {
         const annualAmount = need(L(`rente ${j + 1}, montant annuel`), p.amount, { min: 0 });
         const pension: DbPension = {
@@ -349,9 +422,11 @@ export function formFromJson(text: string): FormState {
   };
   const spouses = [0, 1].map((i) => {
     const s = (src.spouses as SpouseForm[] | undefined)?.[i];
-    const base = mergeStr({ ...d.spouses[i], pensions: undefined } as unknown as Record<string, string>, s) as unknown as SpouseForm;
+    const base = mergeStr({ ...d.spouses[i], pensions: undefined, incomes: undefined } as unknown as Record<string, string>, s) as unknown as SpouseForm;
     const list = Array.isArray(s?.pensions) ? s!.pensions : d.spouses[i].pensions;
-    return { ...base, pensions: list.map((p) => mergeStr(newPension(), p)) };
+    const startYear = str(src.assumptions?.startYear, d.assumptions.startYear);
+    const incomes = (Array.isArray(s?.incomes) ? s!.incomes : []).map((r) => { const m = mergeStr(newIncome(startYear), r) as IncomeForm; return { ...m, frequency: m.frequency === "once" ? "once" : "annual" } as IncomeForm; });
+    return { ...base, pensions: list.map((p) => mergeStr(newPension(), p)), incomes };
   }) as [SpouseForm, SpouseForm];
   const properties = (Array.isArray(src.properties) ? src.properties : []).map((p) => {
     const merged = mergeStr(newProperty(str(src.assumptions?.startYear, d.assumptions.startYear)), p);
@@ -433,12 +508,14 @@ export function describeChanges(base: FormState, cur: FormState): string[] {
     if (v === "") return "vide";
     if (path === "strategy.kind") return STRATEGY_NAMES.find(([k]) => k === v)?.[1] ?? v;
     if (/^properties\.\d+\.owner$/.test(path)) return v === "both" ? "les deux" : who(v);
+    if (/^spouses\.\d\.incomes\.\d+\.frequency$/.test(path)) return v === "once" ? "ponctuel" : "annuel";
     return v === "true" ? "oui" : v === "false" ? "non" : v;
   };
   const label = (path: string): string => {
     const seg = path.split(".");
     const last = KEY_LABELS[seg[seg.length - 1]] ?? seg[seg.length - 1];
     if (seg[0] === "spouses" && seg[2] === "pensions") return `${who(seg[1])}, rente ${+seg[3] + 1} (${last})`;
+    if (seg[0] === "spouses" && seg[2] === "incomes") return `${who(seg[1])}, revenu ${+seg[3] + 1} (${({ label: "nom", amount: "montant", frequency: "fréquence", taxable: "imposable", startYear: "début", endYear: "fin", indexation: "indexation", year: "année" } as Record<string, string>)[seg[4]] ?? seg[4]})`;
     if (seg[0] === "properties") return `Immeuble ${+seg[1] + 1} (${last})`;
     if (seg[0] === "extraExpenses") return `Dépense supplémentaire ${+seg[1] + 1} (${({ label: "nom", year: "année", amount: "montant" } as Record<string, string>)[seg[2]] ?? seg[2]})`;
     // Minuscule initiale, sauf pour les sigles (REER/FERR, CELI, RRQ, PSV).
@@ -453,6 +530,12 @@ export function describeChanges(base: FormState, cur: FormState): string[] {
     if (m) {
       const key = `${verb}${m[1]}.${m[2]}`;
       if (!pensionNoted.has(key)) { pensionNoted.add(key); out.push(`${who(m[1])} : rente ${+m[2] + 1} ${verb}`); }
+      return true;
+    }
+    const inc = /^spouses\.(\d)\.incomes\.(\d+)\./.exec(path);
+    if (inc) {
+      const key = `revenu${verb}${inc[1]}.${inc[2]}`;
+      if (!pensionNoted.has(key)) { pensionNoted.add(key); out.push(`${who(inc[1])} : revenu ${+inc[2] + 1} ${verb.replace(/ée$/, "é")}`); }
       return true;
     }
     const e = /^extraExpenses\.(\d+)\./.exec(path);

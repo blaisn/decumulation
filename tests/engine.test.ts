@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import table2026 from "../src/engine/data/tax-2026.json";
 import { progressiveTax, householdTax, optimizeSplit, indexTable, marginalRate, splitCap, MAX_SPLIT_SHARE, SPLIT_TOLERANCE } from "../src/engine/tax";
-import { runProjection, dbAmount } from "../src/engine/projection";
+import { runProjection, dbAmount, otherIncomeAmount } from "../src/engine/projection";
 import { compareStrategies, defaultCandidates, compareDeathOrders, deathScenarios, applyDeathScenario, summarize, compareLongevity, longevityScenarios } from "../src/engine/compare";
 import { gompertz, representativeDeathAges } from "../src/engine/mortality";
 import { PSV_AGES, RRQ_AGES, psvAmount, psvFactor, rrqAmount, rrqEarlyMonthlyRate, rrqFactor } from "../src/engine/benefits";
 import { ALL_FREE, ageAtPlanEnd, applyChoice, benefitRanges, choiceKey, compareResults, countChoices, currentChoice, enumerateChoices, evaluateChoice, evaluateChoices, isFeasible, optimizeBenefits, rankResults } from "../src/engine/optimize";
 import type { ChoiceResult, FreeChoices } from "../src/engine/optimize";
-import type { Property, Scenario, TaxYearTable } from "../src/engine/types";
+import type { OtherIncome, Property, Scenario, TaxYearTable } from "../src/engine/types";
 
 const tax = table2026 as unknown as TaxYearTable;
 const total = (r: { tax: [number, number] }) => r.tax[0] + r.tax[1];
@@ -1543,5 +1543,155 @@ describe("espace CELI : droits de cotisation par année", () => {
     const rows = runProjection(std(), tax);
     expect(strip(rows).every((y) => y.spouses.every((p) => p.celiRoom === 0))).toBe(true);
     expect(rows.every((y) => y.spouses.every((p) => Number.isFinite(p.celiRoom) && p.celiRoom >= 0))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("revenus des conjoints : salaire, location, héritage...", () => {
+  type Sp = Scenario["spouses"][0];
+  const salary = (o: Partial<Extract<OtherIncome, { frequency: "annual" }>> = {}): OtherIncome => ({ label: "Salaire", amount: 60000, frequency: "annual", taxable: true, startYear: 2027, endYear: 2029, indexation: 0.03, ...o });
+  const once = (o: Partial<Extract<OtherIncome, { frequency: "once" }>> = {}): OtherIncome => ({ label: "Héritage", amount: 300000, frequency: "once", taxable: false, year: 2028, ...o });
+  const person = (name: string, birthYear: number, o: { db?: number; rrq?: number; psv?: number; reer?: number; celi?: number; incomes?: OtherIncome[]; deathAge?: number } = {}): Sp => ({
+    name, birthYear, deathAge: o.deathAge, otherIncomes: o.incomes,
+    dbPensions: o.db ? [{ label: "RPA", annualAmount: o.db, startAge: 60, indexation: 0.02, survivorPct: 0.6 }] : [],
+    rrq: { annualAmount: o.rrq ?? 14000, startAge: 65 }, psv: { annualAmount: o.psv ?? 8700, startAge: 65 }, reer: o.reer ?? 600000, celi: o.celi ?? 90000, celiRoom: 40000,
+  });
+  const scen = (a: Sp, b: Sp, spending = 100000, extra: Partial<Scenario> = {}): Scenario => ({
+    spouses: [a, b], targetNetSpending: spending, ...extra,
+    assumptions: { startYear: 2026, endAge: 95, inflation: 0.02, rrqIndexation: 0.02, psvIndexation: 0.02, reerReturn: 0.04, celiReturn: 0.04 },
+  });
+  const std = (incomes?: OtherIncome[], other?: OtherIncome[]) => scen(person("A", 1960, { db: 45000, incomes }), person("B", 1962, { db: 25000, incomes: other }));
+  const at = (rows: ReturnType<typeof runProjection>, year: number) => rows.find((y) => y.year === year)!;
+  const sum = (y: ReturnType<typeof at>, f: (p: ReturnType<typeof at>["spouses"][0]) => number) => f(y.spouses[0]) + f(y.spouses[1]);
+
+  // ---- montants
+  it("annuel : rien avant l'année de début, le montant de cette année-là, puis indexé jusqu'à l'année de fin comprise", () => {
+    const r = salary();
+    expect([2026, 2027, 2028, 2029, 2030].map((y) => otherIncomeAmount(r, y))).toEqual([0, 60000, 60000 * 1.03, 60000 * 1.03 * 1.03, 0].map((v, k) => (k === 4 ? 0 : v)));
+    expect(otherIncomeAmount(r, 2027)).toBe(60000);                                         // le montant saisi est celui de l'année de début
+    expect(otherIncomeAmount(r, 2029)).toBeCloseTo(60000 * Math.pow(1.03, 2), 6);
+  });
+  it("annuel sans année de fin : jusqu'à la fin du plan; indexation nulle ou négative possible", () => {
+    const r = salary({ endYear: undefined, indexation: 0 });
+    expect(otherIncomeAmount(r, 2060)).toBe(60000);
+    expect(otherIncomeAmount(salary({ endYear: undefined, indexation: -0.05 }), 2029)).toBeCloseTo(60000 * Math.pow(0.95, 2), 6);
+    expect(otherIncomeAmount(r, 2026)).toBe(0);
+  });
+  it("ponctuel : le montant saisi, en dollars de son année, sans indexation, cette année-là seulement", () => {
+    const r = once({ amount: 25000, year: 2031 });
+    expect([2026, 2030, 2031, 2032, 2050].map((y) => otherIncomeAmount(r, y))).toEqual([0, 0, 25000, 0, 0]);
+  });
+  it("un revenu qui commence avant le début du plan est indexé depuis son année de début (le formulaire l'interdit, le moteur le définit)", () => {
+    expect(otherIncomeAmount(salary({ startYear: 2024, endYear: undefined }), 2026)).toBeCloseTo(60000 * Math.pow(1.03, 2), 6);
+  });
+
+  // ---- revenu imposable
+  it("revenu imposable : il s'ajoute au revenu imposable du conjoint et se retrouve dans ses chiffres de l'année", () => {
+    const s = scen(person("A", 1971, { reer: 0, celi: 0, rrq: 0, psv: 0, incomes: [salary({ startYear: 2026, endYear: 2026, amount: 80000 })] }), person("B", 1971, { reer: 0, celi: 0, rrq: 0, psv: 0 }), 30000);
+    const y = at(runProjection(s, tax), 2026);
+    expect(y.spouses[0].otherTaxable).toBe(80000);
+    expect(y.spouses[0].otherNonTaxable).toBe(0);
+    expect(y.spouses[0].taxableIncome).toBeCloseTo(80000, 6);
+    expect(y.spouses[1].otherTaxable).toBe(0);
+    const expected = householdTax([{ age: 55, income: 80000, eligiblePension: 0 }, { age: 55, income: 0, eligiblePension: 0 }], tax);
+    expect(y.spouses[0].tax).toBeCloseTo(expected.tax[0], 6);                                // imposé comme un revenu ordinaire de 80 000 $
+    expect(y.spouses[1].tax).toBe(0);
+  });
+  it("revenu imposable : jamais fractionnable, même très élevé; seule la pension admissible l'est", () => {
+    // A touche une rente de 20 000 $ (sans REER : c'est sa seule pension admissible) et un salaire de 120 000 $; B n'a rien.
+    const s = scen(person("A", 1960, { db: 20000, reer: 0, incomes: [salary({ startYear: 2026, endYear: 2040, amount: 120000, indexation: 0.02 })] }), person("B", 1960, { rrq: 0, psv: 0, reer: 0 }), 60000);
+    const rows = runProjection(s, tax);
+    for (const y of rows.filter((r) => r.year <= 2040)) {
+      const p = y.spouses[0];
+      expect(-p.pensionSplit).toBeLessThanOrEqual(0.5 * p.pensionIncome + 1e-6);                  // au plus 50 % de la rente, jamais 50 % du salaire
+      expect(p.pensionSplit).toBeLessThan(0);                                                      // et l'écart de revenu est tel que la rente est bien fractionnée
+      expect(-p.pensionSplit).toBeCloseTo(0.5 * p.pensionIncome, 4);                               // jusqu'au plafond : il restait 140 000 $ d'écart
+    }
+    // si le salaire était admissible, le plafond serait de 70 000 $ et plus : il est bien de 10 000 $
+    expect(-at(rows, 2026).spouses[0].pensionSplit).toBeCloseTo(10000, 4);
+  });
+  it("revenu imposable : un salaire élevé déclenche la récupération de la PSV, seulement pendant qu'il est versé", () => {
+    const s = scen(person("A", 1956, { incomes: [salary({ startYear: 2026, endYear: 2028, amount: 100000 })] }), person("B", 1956), 80000);
+    const rows = runProjection(s, tax);
+    expect(sum(at(rows, 2027), (p) => p.psvClawback)).toBeGreaterThan(1000);
+    expect(sum(at(rows, 2030), (p) => p.psvClawback)).toBe(0);
+  });
+  it("revenu imposable : l'impôt de l'année monte, et les retraits du REER disparaissent", () => {
+    const base = runProjection(std(), tax), rows = runProjection(std([salary()]), tax);
+    expect(sum(at(rows, 2027), (p) => p.tax)).toBeGreaterThan(sum(at(base, 2027), (p) => p.tax) + 10000);
+    expect(sum(at(rows, 2027), (p) => p.reerWithdrawal)).toBeLessThan(sum(at(base, 2027), (p) => p.reerWithdrawal) - 1000);
+    expect(at(rows, 2026).spouses[0].tax).toBeCloseTo(at(base, 2026).spouses[0].tax, 6);          // l'année précédente n'est pas touchée
+    expect(at(rows, 2030).targetSpending).toBeCloseTo(at(base, 2030).targetSpending, 6);          // ni la dépense visée
+  });
+  it("revenu imposable : la fonte du REER en tient compte (pas de retrait forcé quand le salaire dépasse déjà le plafond)", () => {
+    const strategy = { kind: "meltdown" as const, ceiling: 90000 };
+    const sans = runProjection(scen(person("A", 1960, { db: 45000 }), person("B", 1962, { db: 25000 }), 100000, { strategy }), tax);
+    const avec = runProjection(scen(person("A", 1960, { db: 45000, incomes: [salary({ startYear: 2026, endYear: 2026, amount: 100000 })] }), person("B", 1962, { db: 25000 }), 100000, { strategy }), tax);
+    expect(at(sans, 2026).spouses[0].reerWithdrawal).toBeGreaterThan(10000);
+    expect(at(avec, 2026).spouses[0].reerWithdrawal).toBe(0);                                      // A est déjà au-dessus du plafond
+  });
+
+  // ---- revenu non imposable
+  it("revenu non imposable : de l'argent reçu, sans aucun impôt", () => {
+    const s = scen(person("A", 1971, { reer: 0, celi: 0, rrq: 0, psv: 0, incomes: [once({ amount: 50000, year: 2026 })] }), person("B", 1971, { reer: 0, celi: 0, rrq: 0, psv: 0 }), 30000);
+    const y = at(runProjection(s, tax), 2026);
+    expect(y.spouses[0].otherNonTaxable).toBe(50000);
+    expect(y.spouses[0].otherTaxable).toBe(0);
+    expect(sum(y, (p) => p.tax)).toBe(0);
+    expect(y.spouses[0].taxableIncome).toBe(0);
+    expect(y.shortfall).toBe(0);
+    expect(sum(y, (p) => p.celiContribution + p.nonRegContribution)).toBeCloseTo(50000 - y.targetSpending, 6);        // le surplus est placé
+  });
+  it("héritage ponctuel : finance les dépenses, le surplus est placé au CELI (dans la limite des droits) puis au compte non enregistré", () => {
+    const y = at(runProjection(std([once()]), tax), 2028);
+    expect(y.spouses[0].otherNonTaxable).toBe(300000);
+    expect(sum(y, (p) => p.reerWithdrawal)).toBe(0);                                              // plus besoin de retirer du REER cette année-là
+    const celi = y.spouses[0].celiContribution, nonReg = y.spouses[0].nonRegContribution + y.spouses[1].nonRegContribution;
+    expect(celi).toBeGreaterThan(0);
+    expect(celi).toBeLessThanOrEqual(y.spouses[0].celiRoom + 1e-6);
+    expect(nonReg).toBeGreaterThan(100000);
+    expect(sum(y, (p) => p.celiContribution + p.nonRegContribution)).toBeCloseTo(300000 - sum(y, (p) => p.tax) - y.targetSpending + sum(y, (p) => p.nonRegIncome) + sum(y, (p) => p.pensionIncome + p.rrqIncome + p.psvIncome), 4);
+  });
+  it("les deux types d'un même conjoint s'additionnent chacun de leur côté, et chaque conjoint a les siens", () => {
+    const y = at(runProjection(std([salary({ startYear: 2028, endYear: 2028, amount: 10000 }), salary({ label: "Autre", startYear: 2028, endYear: 2028, amount: 5000 }), once({ amount: 7000, year: 2028 }), once({ amount: 3000, year: 2028 })], [once({ amount: 2000, year: 2028 })]), tax), 2028);
+    expect(y.spouses.map((p) => p.otherTaxable)).toEqual([15000, 0]);
+    expect(y.spouses.map((p) => p.otherNonTaxable)).toEqual([10000, 2000]);
+  });
+
+  // ---- cohérence
+  it("conservation de l'argent : revenus + manque = impôt + dépenses + argent placé, avec tous les types de revenus, chaque année", () => {
+    const scenarios = [std([salary(), once()]), std([salary({ endYear: undefined })], [once({ amount: 40000, year: 2031 })]),
+      scen(person("A", 1960, { db: 45000, incomes: [salary({ endYear: undefined })], deathAge: 72 }), person("B", 1962, { db: 25000, incomes: [once()] }), 100000, { extraExpenses: [{ label: "x", year: 2030, amount: 30000 }] })];
+    for (const s of scenarios) for (const y of runProjection(s, tax)) {
+      const cashIn = sum(y, (p) => p.pensionIncome + p.rrqIncome + p.psvIncome + p.reerWithdrawal + p.celiWithdrawal + p.nonRegWithdrawal + p.nonRegIncome + p.propertyProceeds + p.otherTaxable + p.otherNonTaxable);
+      const out = sum(y, (p) => p.tax + p.psvClawback) + y.targetSpending + y.extraSpending + sum(y, (p) => p.celiContribution + p.nonRegContribution);
+      expect(Math.abs(cashIn + y.shortfall - out)).toBeLessThan(1e-4);
+    }
+  });
+  it("un revenu s'arrête au décès de son conjoint; ceux de l'autre conjoint continuent", () => {
+    const s = scen(person("A", 1960, { db: 45000, deathAge: 70, incomes: [salary({ startYear: 2026, endYear: undefined, amount: 20000 })] }), person("B", 1962, { db: 25000, incomes: [salary({ startYear: 2026, endYear: undefined, amount: 10000 })] }), 100000);
+    const rows = runProjection(s, tax);                                                           // A décède fin 2030
+    expect(at(rows, 2030).spouses[0].otherTaxable).toBeGreaterThan(20000);                        // l'année du décès, il est encore versé
+    for (const y of rows.filter((r) => r.year > 2030)) { expect(y.spouses[0].otherTaxable).toBe(0); expect(y.spouses[1].otherTaxable).toBeGreaterThan(10000); }
+  });
+  it("sans revenus (absents, vides ou de montant nul), le plan est identique et tous les montants sont nuls", () => {
+    const sans = JSON.stringify(runProjection(std(), tax));
+    expect(JSON.stringify(runProjection(std([], []), tax))).toBe(sans);
+    expect(JSON.stringify(runProjection(std([salary({ amount: 0 }), once({ amount: 0 })]), tax))).toBe(sans);
+    expect(runProjection(std(), tax).every((y) => y.spouses.every((p) => p.otherTaxable === 0 && p.otherNonTaxable === 0))).toBe(true);
+  });
+  it("un revenu hors de la période du plan n'a aucun effet", () => {
+    const sans = JSON.stringify(runProjection(std(), tax));
+    expect(JSON.stringify(runProjection(std([once({ year: 2090 }), salary({ startYear: 2080, endYear: undefined })]), tax))).toBe(sans);
+    expect(JSON.stringify(runProjection(std([once({ year: 2020 })]), tax))).toBe(sans);
+  });
+  it("les stratégies, les durées de vie, l'optimisation de la RRQ et de la PSV et le scénario d'origine tiennent compte des revenus", () => {
+    const s = std([salary(), once()]);
+    const before = JSON.stringify(s);
+    expect(compareStrategies(s, tax, defaultCandidates().slice(0, 3)).length).toBe(3);
+    expect(applyDeathScenario(s, { label: "x", deathAges: [70, undefined] }).spouses[0].otherIncomes?.length).toBe(2);
+    expect(optimizeBenefits(s, tax, {}, { rrq: [false, true], psv: [false, false] }).total).toBe(9);
+    runProjection(s, tax);
+    expect(JSON.stringify(s)).toBe(before);
   });
 });

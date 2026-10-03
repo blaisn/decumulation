@@ -3,12 +3,12 @@ import { benefitRanges, enumerateChoices, rankResults } from "../../src/index";
 import type { CompareOptions, DeathOrderComparison, FreeChoices, OptimizationResult, Scenario, StrategySummary, YearResult } from "../../src/index";
 import { runJob } from "./compute";
 import type { Job, JobResult } from "./compute";
-import { BALANCE_LEGEND, PROPERTY_LEGEND, SOURCE_LEGEND, balancesChart, legend, sourcesChart } from "./charts";
+import { BALANCE_LEGEND, INCOME_LEGEND, PROPERTY_LEGEND, SOURCE_LEGEND, balancesChart, legend, sourcesChart } from "./charts";
 import { comparePanel } from "./compare-view";
 import { planToCsv } from "./csv";
 import { esc, fmtMoney } from "./format";
 import { renderForm, setPath } from "./form";
-import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, extraExpenseHint, formFromJson, formToJson, newExtraExpense, newPension, newProperty, propertyHint, shareComplement, strategyToForm, toScenario, applyBenefitChoice, benefitHint } from "./model";
+import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, extraExpenseHint, formFromJson, formToJson, incomeHint, newExtraExpense, newIncome, newPension, newProperty, propertyHint, shareComplement, strategyToForm, toScenario, applyBenefitChoice, benefitHint } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
 import { confirmDialog } from "./dialog";
 import { OptimizationCancelled, runChoices, workerCount } from "./optimize-run";
@@ -242,6 +242,10 @@ inputs.addEventListener("input", (e) => {
   // Aperçu des immeubles : mis à jour en direct (et quand l'année de départ, l'inflation, la fin du plan ou une naissance change).
   const refreshPropertyHints = () => formBody.querySelectorAll<HTMLElement>("[data-property-hint]").forEach((h) => { h.textContent = propertyHint(form, Number(h.dataset.propertyHint)); });
   if (/^properties\.\d+\./.test(path) || /^(assumptions\.(startYear|inflation|endAge)|spouses\.\d\.birthYear)$/.test(path)) refreshPropertyHints();
+  // Aperçu des revenus : mis à jour en direct (et quand l'année de départ, la fin du plan, une naissance ou un décès change).
+  if (/^spouses\.\d\.incomes\.\d+\./.test(path) || /^(assumptions\.(startYear|endAge)|spouses\.\d\.(birthYear|deathAge))$/.test(path)) {
+    formBody.querySelectorAll<HTMLElement>("[data-income-hint]").forEach((h) => { const [si, ij] = (h.dataset.incomeHint ?? "0.0").split(".").map(Number); h.textContent = incomeHint(form, si, ij); });
+  }
   // Aperçu des dépenses supplémentaires : mis à jour en direct, comme celui des immeubles.
   if (/^extraExpenses\.\d+\./.test(path) || /^(assumptions\.(startYear|inflation|endAge)|spouses\.\d\.birthYear)$/.test(path)) {
     formBody.querySelectorAll<HTMLElement>("[data-extra-hint]").forEach((h) => { h.textContent = extraExpenseHint(form, Number(h.dataset.extraHint)); });
@@ -276,6 +280,8 @@ inputs.addEventListener("click", async (e) => {
   }
   if (b.dataset.action === "add-extra") { form.extraExpenses.push(newExtraExpense(form.assumptions.startYear)); openSecs.add("extras"); }
   else if (b.dataset.action === "remove-extra") form.extraExpenses.splice(Number(b.dataset.index), 1);
+  else if (b.dataset.action === "add-income") form.spouses[i].incomes.push(newIncome(form.assumptions.startYear));
+  else if (b.dataset.action === "remove-income") form.spouses[i].incomes.splice(Number(b.dataset.index), 1);
   else if (b.dataset.action === "add-property") { form.properties.push(newProperty(form.assumptions.startYear)); openSecs.add("properties"); }
   else if (b.dataset.action === "remove-property") form.properties.splice(Number(b.dataset.index), 1);
   else if (b.dataset.action === "add-pension") form.spouses[i].pensions.push(newPension());
@@ -367,7 +373,7 @@ function planPanel(): string {
     ${legend(BALANCE_LEGEND)}
     ${balancesChart(s, rows, real)}
     <h2>D'où vient l'argent</h2>
-    ${legend(plan.rows.some((y) => y.spouses[0].propertyProceeds + y.spouses[1].propertyProceeds > 0) ? [...SOURCE_LEGEND, PROPERTY_LEGEND] : SOURCE_LEGEND, `<li><span class="sw line"></span>Dépenses (visées + supp.) et impôt</li>${first ? `<li><span class="sw s-short"></span>Manque de fonds</li>` : ""}`)}
+    ${legend([...SOURCE_LEGEND, ...(plan.rows.some((y) => y.spouses.some((p) => p.otherTaxable + p.otherNonTaxable > 0)) ? [INCOME_LEGEND] : []), ...(plan.rows.some((y) => y.spouses[0].propertyProceeds + y.spouses[1].propertyProceeds > 0) ? [PROPERTY_LEGEND] : [])], `<li><span class="sw line"></span>Dépenses (visées + supp.) et impôt</li>${first ? `<li><span class="sw s-short"></span>Manque de fonds</li>` : ""}`)}
     ${sourcesChart(s, rows, real)}
     <p class="note">Quand les barres dépassent la ligne, l'excédent est réinvesti dans le CELI, puis dans le compte non enregistré.${first ? " Quand la ligne dépasse les barres, la zone rouge est le manque : des dépenses ne sont pas financées." : ""}</p>`;
 }

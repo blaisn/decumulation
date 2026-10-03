@@ -131,6 +131,7 @@ export function sourcesData(s: Scenario, rows: YearResult[], real: boolean): Sou
     { cls: "s-reer", name: "Retraits REER/FERR", v: (y) => total(y, (p) => p.reerWithdrawal) },
     { cls: "s-nonreg", name: "Non enregistré", v: (y) => total(y, (p) => p.nonRegIncome + p.nonRegWithdrawal) },
     { cls: "s-celi", name: "Retraits CELI", v: (y) => total(y, (p) => p.celiWithdrawal) },
+    { cls: "s-income", name: "Revenus (travail et autres)", v: (y) => total(y, (p) => p.otherTaxable + p.otherNonTaxable) },
     { cls: "s-prop", name: "Vente d'immeubles", v: (y) => total(y, (p) => p.propertyProceeds) },
   ];
   return {
@@ -193,6 +194,8 @@ export const SOURCE_LEGEND = [
 
 /** Légende de la vente d'immeubles : ajoutée seulement quand le plan en contient une. */
 export const PROPERTY_LEGEND = { cls: "s-prop", name: "Vente d'immeubles" };
+/** Légende des revenus (salaire, location, héritage...) : ajoutée seulement quand le plan en contient. */
+export const INCOME_LEGEND = { cls: "s-income", name: "Revenus (travail et autres)" };
 
 export function legend(items: { cls: string; name: string }[], extra = ""): string {
   return `<ul class="legend">${items.map((i) => `<li><span class="sw ${i.cls}"></span>${esc(i.name)}</li>`).join("")}${extra}</ul>`;
