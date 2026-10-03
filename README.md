@@ -59,6 +59,7 @@ Vérification à la main après une mise à jour (Electron lui-même ne se teste
 - `examples/` : exemple exécutable
 - `ui/` : interface (HTML, CSS, TypeScript sans framework) : `model.ts` (formulaire vers scénario, validation, fichiers), `form.ts`, `charts.ts` (SVG), `tables.ts`, `csv.ts`, `compute.ts` + `worker.ts` (calculs hors du fil de l'interface), `main.ts` (branchement)
 - `electron/` : fenêtre, boîtes de dialogue Ouvrir/Enregistrer (`main.ts`), mémoire du dernier dossier utilisé (`dialog-dir.ts`, testée sans Electron) et passerelle sécurisée (`preload.ts`)
+- `build/` : icône de l'application, `icon.ico` (obligatoire pour le MSI, voir `docs/PUBLICATION.md`) et sa source modifiable `icon.svg`
 - `scripts/build.mjs` : assemble `dist/` avec esbuild
 - `src/engine/data/tax-2026.json` : table fiscale 2026 (voir `_note` pour les valeurs à valider)
 

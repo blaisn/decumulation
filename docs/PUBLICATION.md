@@ -64,7 +64,21 @@ Sous Windows, la construction s'arrête avec, répété quatre fois (reprises au
 **Avertissements sans gravité** qui s'affichent aussi :
 
 - `author is missed in the package.json` : ajouter `"author": "Votre nom"` dans `package.json`. C'est le nom de l'éditeur que montrent l'installateur et le MSI.
-- `default Electron icon is used` : l'application n'a pas d'icône. Déposer un fichier `build/icon.ico` (au moins 256 × 256 pixels) pour remplacer l'icône d'Electron.
+- `Manufacturer is not set for MSI` : même remède que `author is missed` ci-dessus.
+
+### Dépannage : le MSI échoue avec « LGHT0094 … The identifier 'Icon:…Icon.exe' could not be found »
+
+La construction s'arrête à l'étape du MSI, après ces lignes :
+
+    default Electron icon is used  reason=application icon is not set
+    building        target=MSI arch=x64 file=release\Decumulation-0.2.0.msi
+    error LGHT0094 : The identifier 'Icon:DcumulationIcon.exe' could not be found.
+
+**Cause.** Sans icône d'application, electron-builder emploie celle d'Electron pour l'installateur et la version portable, sans problème. Mais le modèle du MSI fait référence à une icône que WiX (l'outil qui assemble le MSI) ne trouve pas : c'est un problème connu d'electron-builder (tickets #5744 et #7892). Le « é » absent de l'identifiant est normal, WiX n'acceptant que des caractères ASCII. Une version antérieure de ce guide présentait l'absence d'icône comme sans gravité : c'est vrai sauf pour le MSI.
+
+**Solution.** Le projet fournit `build/icon.ico` (electron-builder le trouve seul, sans réglage) et `build/icon.svg`, sa source modifiable. Remplacez-les par votre propre icône quand vous le voulez : un fichier `.ico` d'**au moins 256 × 256 pixels**, de préférence avec aussi 16, 32 et 48. Le dossier `build/` ne doit pas être exclu par `.gitignore`, sinon la CI n'a pas l'icône (un test le vérifie). Relancez ensuite `npm run dist`.
+
+**Si l'erreur persiste**, ouvrez `release\__msi-x64\project.wxs`, à la ligne indiquée dans le message, et cherchez les mentions de `Icon` : elles montrent quel identifiant WiX attend et lequel est déclaré.
 
 ## 4. Avertissement SmartScreen et signature de code
 

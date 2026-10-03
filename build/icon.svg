@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Décumulation</title>
+  <rect x="32" y="32" width="960" height="960" rx="200" fill="#17324b"/>
+  <rect x="157" y="340" width="190" height="460" rx="30" fill="#c4912f"/>
+  <rect x="417" y="480" width="190" height="320" rx="30" fill="#2f8f74"/>
+  <rect x="677" y="620" width="190" height="180" rx="30" fill="#8fb8de"/>
+  <rect x="120" y="820" width="784" height="24" rx="12" fill="#f0f3f0"/>
+</svg>
