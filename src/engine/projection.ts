@@ -76,6 +76,9 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
     const nrIncome = bal.map((b, i) => (alive[i] ? b.nonReg * nrReturn * nrShare : 0));
     const tax = indexTable(baseTax, infl);
     const target = s.targetNetSpending * infl * (both ? 1 : spendingRatio);
+    // Dépenses supplémentaires de l'année (montants nets, indexés, non réduits après un décès) : le revenu requis est la somme des deux.
+    const oneOff = (s.extraExpenses ?? []).reduce((sum, e) => sum + (e.year === year ? e.amount * infl : 0), 0);
+    const need = target + oneOff;
     // Répartition de la dépense visée : selon la part du premier conjoint tant que les deux vivent, puis tout au survivant.
     const share0 = Math.min(1, Math.max(0, s.firstSpouseSpendingShare ?? 0.5));
     const shares = both ? [share0, 1 - share0] : [alive[0] ? 1 : 0, alive[1] ? 1 : 0];
@@ -159,13 +162,13 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
     const funded = (e: [number, number]) => netFor(e) + celiUsed + nrUsed;
     for (const tier of tiers) {
       const forced = tier.kind === "reer" && tier.force === true;
-      if (!forced && funded(extra) >= target) break;
+      if (!forced && funded(extra) >= need) break;
       if (tier.kind === "celi") {
-        celiUsed += Math.min(celiCaps[0] + celiCaps[1] - celiUsed, target - funded(extra));
+        celiUsed += Math.min(celiCaps[0] + celiCaps[1] - celiUsed, need - funded(extra));
         continue;
       }
       if (tier.kind === "nonreg") {
-        nrUsed += Math.min(nrCaps[0] + nrCaps[1] - nrUsed, target - funded(extra));
+        nrUsed += Math.min(nrCaps[0] + nrCaps[1] - nrUsed, need - funded(extra));
         continue;
       }
       const capT = tier.caps[0] + tier.caps[1];
@@ -175,12 +178,12 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
         const inc = allocate(t, tier.caps);
         return [from[0] + inc[0], from[1] + inc[1]];
       };
-      if (forced || funded(at(capT)) <= target) extra = at(capT);
+      if (forced || funded(at(capT)) <= need) extra = at(capT);
       else {
         let lo = 0, hi = capT;
         for (let k = 0; k < 40; k++) {
           const mid = (lo + hi) / 2;
-          if (funded(at(mid)) < target) lo = mid; else hi = mid;
+          if (funded(at(mid)) < need) lo = mid; else hi = mid;
         }
         extra = at(hi);
       }
@@ -189,11 +192,11 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
     const celiW = allocate(celiUsed, celiCaps);
     const nrW = allocate(nrUsed, nrCaps);
     const total = funded(extra);
-    const celiNeed = Math.max(0, target - total);
+    const celiNeed = Math.max(0, need - total);
 
     // Tout surplus net (fonte du REER, ou retraits FERR minimums supérieurs aux dépenses) est réinvesti :
     // d'abord au CELI (dans la limite des droits), puis au compte non enregistré.
-    const surplus = Math.max(0, total - target);
+    const surplus = Math.max(0, total - need);
     const roomCaps: [number, number] = [alive[0] ? bal[0].room : 0, alive[1] ? bal[1].room : 0];
     const celiIn = allocate(Math.min(surplus, roomCaps[0] + roomCaps[1]), roomCaps);
     const nrIn = allocate(surplus - celiIn[0] - celiIn[1], [alive[0] ? Infinity : 0, alive[1] ? Infinity : 0]);
@@ -220,13 +223,13 @@ export function runProjection(s: Scenario, baseTax: TaxYearTable): YearResult[] 
       reerWithdrawal: reerW[i], celiWithdrawal: celiW[i],
       taxableIncome: r.incomeAfterSplit[i] - r.clawback[i], psvClawback: r.clawback[i], pensionSplit: r.splitAmount[i], tax: r.tax[i],
       reerBalanceEnd: bal[i].reer, celiBalanceEnd: bal[i].celi,
-      nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
+      nonRegIncome: nrIncome[i], nonRegWithdrawal: nrW[i], celiRoom: roomCaps[i], celiContribution: celiIn[i], nonRegContribution: nrIn[i], nonRegBalanceEnd: bal[i].nonReg,
       propertyProceeds: proceeds[i], taxableCapitalGain: gainIncome[i],
-      spending: target * shares[i], spendingShare: shares[i], shortfall: celiNeed * shares[i],
+      extraSpending: oneOff * shares[i], spending: target * shares[i], spendingShare: shares[i], shortfall: celiNeed * shares[i],
       marginalRate: alive[i] ? r.marginal[i] : 0,
     })) as [SpouseYear, SpouseYear];
 
-    results.push({ year, spouses: spouseYears, targetSpending: target, netIncome: target - celiNeed, shortfall: celiNeed });
+    results.push({ year, spouses: spouseYears, targetSpending: target, extraSpending: oneOff, netIncome: need - celiNeed, shortfall: celiNeed });
   }
   return results;
 }

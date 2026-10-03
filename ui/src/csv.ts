@@ -24,6 +24,8 @@ const COLUMNS: { header: string; value: (r: Row) => string | number }[] = [
   { header: "Rendement imposable non enregistré", value: (r) => r.sp.nonRegIncome },
   { header: "Vente d'immeubles", value: (r) => r.sp.propertyProceeds },
   { header: "Gain en capital imposable", value: (r) => r.sp.taxableCapitalGain },
+  // Espace CELI (droits de cotisation disponibles), juste avant la cotisation qui l'utilise. Seulement dans le CSV.
+  { header: "Espace CELI", value: (r) => r.sp.celiRoom },
   { header: "Cotisation CELI", value: (r) => r.sp.celiContribution },
   { header: "Cotisation non enregistré", value: (r) => r.sp.nonRegContribution },
   { header: "Récupération de la PSV", value: (r) => r.sp.psvClawback },
@@ -32,6 +34,7 @@ const COLUMNS: { header: string; value: (r: Row) => string | number }[] = [
   { header: "Taux marginal (%)", value: (r) => (r.sp.marginalRate * 100).toFixed(2).replace(".", ",") },
   { header: "Impôt", value: (r) => r.sp.tax },
   { header: "Dépenses visées", value: (r) => r.sp.spending },
+  { header: "Dépenses supp.", value: (r) => r.sp.extraSpending },
   { header: "Part des dépenses (%)", value: (r) => (r.sp.spendingShare * 100).toFixed(2).replace(".", ",") },
   { header: "Manque", value: (r) => r.sp.shortfall },
   { header: "Solde REER/FERR", value: (r) => r.sp.reerBalanceEnd },

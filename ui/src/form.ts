@@ -1,4 +1,4 @@
-import { STRATEGY_NAMES, benefitHint, principalResidenceCount, propertyHint, shareComplement } from "./model";
+import { STRATEGY_NAMES, benefitHint, extraExpenseHint, principalResidenceCount, propertyHint, shareComplement } from "./model";
 import type { FormState, SpouseForm } from "./model";
 import { esc } from "./format";
 
@@ -49,6 +49,22 @@ function propertyRows(f: FormState): string {
       <p class="hint wide benefit" data-property-hint="${j}" aria-live="polite">${esc(propertyHint(f, j))}</p>
     </div>
     <button type="button" class="link danger" data-action="remove-property" data-index="${j}">Retirer cet immeuble</button></div>`;
+  }).join("");
+}
+
+/** Dépenses supplémentaires ponctuelles : une ligne par dépense, avec son année et son montant. */
+function extraRows(f: FormState): string {
+  if (!f.extraExpenses.length) return `<p class="empty">Aucune dépense supplémentaire : ajoutez une voiture, une rénovation, un voyage ou un cadeau prévu une année précise.</p>`;
+  const start = f.assumptions.startYear.trim() || "l'année de départ";
+  return f.extraExpenses.map((e, j) => {
+    const b = `extraExpenses.${j}`;
+    return `<div class="extra"><div class="grid pgrid">
+      ${textField("Description", `${b}.label`, e.label, { wide: true, placeholder: `Dépense ${j + 1}` })}
+      ${field("Année", `${b}.year`, e.year, { hint: "À partir du début du plan" })}
+      ${field("Montant", `${b}.amount`, e.amount, { suffix: "$", hint: `Après impôt, en dollars de ${start}` })}
+      <p class="hint wide benefit" data-extra-hint="${j}" aria-live="polite">${esc(extraExpenseHint(f, j))}</p>
+    </div>
+    <button type="button" class="link danger" data-action="remove-extra" data-index="${j}">Retirer cette dépense</button></div>`;
   }).join("");
 }
 
@@ -111,6 +127,11 @@ export function renderForm(f: FormState, openSecs: Set<string>): string {
     ${propertyRows(f)}
     ${principalResidenceCount(f) > 1 ? `<p class="alert soft" role="status">Plusieurs résidences principales sont cochées. Une famille ne peut en désigner qu'une par année : le calcul exonère tous les gains cochés, ce qui peut sous-estimer l'impôt.</p>` : ""}
     <button type="button" class="link" data-action="add-property">Ajouter un immeuble</button>
+  </div></details>
+  <details class="sec" data-sec="extras"${o("extras") ? " open" : ""}><summary>Dépenses supplémentaires${f.extraExpenses.length ? ` (${f.extraExpenses.length})` : ""}</summary><div class="body">
+    <p class="note">Dépenses ponctuelles qui s'ajoutent, l'année indiquée, à la dépense annuelle visée : le revenu requis de cette année-là est la somme des deux. Les montants sont nets (après impôt) et indexés à l'inflation, comme la dépense annuelle; ils ne sont pas réduits après un décès. Elles se répartissent entre les conjoints selon leur part des dépenses.</p>
+    ${extraRows(f)}
+    <button type="button" class="link" data-action="add-extra">Ajouter une dépense</button>
   </div></details>
   <details class="sec" data-sec="strategy"${o("strategy") ? " open" : ""}><summary>Stratégie de retrait</summary><div class="body">
     <label class="f wide"><span class="lab">Ordre des retraits</span><select data-path="strategy.kind" data-rerender="1">${STRATEGY_NAMES.map(([v, t]) => `<option value="${v}"${st.kind === v ? " selected" : ""}>${esc(t)}</option>`).join("")}</select></label>

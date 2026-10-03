@@ -8,7 +8,7 @@ import { comparePanel } from "./compare-view";
 import { planToCsv } from "./csv";
 import { esc, fmtMoney } from "./format";
 import { renderForm, setPath } from "./form";
-import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, formFromJson, formToJson, newPension, newProperty, propertyHint, shareComplement, strategyToForm, toScenario, applyBenefitChoice, benefitHint } from "./model";
+import { changedPaths, defaultForm, describeChanges, fileFromJson, fileToJson, extraExpenseHint, formFromJson, formToJson, newExtraExpense, newPension, newProperty, propertyHint, shareComplement, strategyToForm, toScenario, applyBenefitChoice, benefitHint } from "./model";
 import type { BaseSnapshot, FormState } from "./model";
 import { confirmDialog } from "./dialog";
 import { OptimizationCancelled, runChoices, workerCount } from "./optimize-run";
@@ -242,6 +242,10 @@ inputs.addEventListener("input", (e) => {
   // Aperçu des immeubles : mis à jour en direct (et quand l'année de départ, l'inflation, la fin du plan ou une naissance change).
   const refreshPropertyHints = () => formBody.querySelectorAll<HTMLElement>("[data-property-hint]").forEach((h) => { h.textContent = propertyHint(form, Number(h.dataset.propertyHint)); });
   if (/^properties\.\d+\./.test(path) || /^(assumptions\.(startYear|inflation|endAge)|spouses\.\d\.birthYear)$/.test(path)) refreshPropertyHints();
+  // Aperçu des dépenses supplémentaires : mis à jour en direct, comme celui des immeubles.
+  if (/^extraExpenses\.\d+\./.test(path) || /^(assumptions\.(startYear|inflation|endAge)|spouses\.\d\.birthYear)$/.test(path)) {
+    formBody.querySelectorAll<HTMLElement>("[data-extra-hint]").forEach((h) => { h.textContent = extraExpenseHint(form, Number(h.dataset.extraHint)); });
+  }
   if (el.dataset.rerender) renderInputs(path); else refreshBase();
   if (path === "assumptions.startYear") renderUnits();
   schedulePlan();
@@ -270,7 +274,9 @@ inputs.addEventListener("click", async (e) => {
     form = structuredClone(base.form);
     persist(); markStale(); renderInputs(); schedulePlan(0); renderPanel(); return;
   }
-  if (b.dataset.action === "add-property") { form.properties.push(newProperty(form.assumptions.startYear)); openSecs.add("properties"); }
+  if (b.dataset.action === "add-extra") { form.extraExpenses.push(newExtraExpense(form.assumptions.startYear)); openSecs.add("extras"); }
+  else if (b.dataset.action === "remove-extra") form.extraExpenses.splice(Number(b.dataset.index), 1);
+  else if (b.dataset.action === "add-property") { form.properties.push(newProperty(form.assumptions.startYear)); openSecs.add("properties"); }
   else if (b.dataset.action === "remove-property") form.properties.splice(Number(b.dataset.index), 1);
   else if (b.dataset.action === "add-pension") form.spouses[i].pensions.push(newPension());
   else if (b.dataset.action === "remove-pension") form.spouses[i].pensions.splice(Number(b.dataset.index), 1);
@@ -349,9 +355,11 @@ function planPanel(): string {
   const first = rows.find((y) => y.shortfall > 1);
   const last = rows[rows.length - 1];
   const missing = first ? (real ? first.shortfall / Math.pow(1 + s.assumptions.inflation, first.year - s.assumptions.startYear) : first.shortfall) : 0;
+  // Avec des dépenses supplémentaires, ce qu'il faut financer est la somme des deux.
+  const dep = rows.some((y) => y.extraSpending > 0) ? "les dépenses visées et supplémentaires" : "les dépenses visées";
   const verdict = first
-    ? `<strong>Les actifs ne suffisent plus à partir de ${first.year}.</strong> Cette année-là, il manque ${fmtMoney(missing)} pour payer les dépenses visées.`
-    : `Les dépenses visées sont financées chaque année jusqu'en ${last.year}.`;
+    ? `<strong>Les actifs ne suffisent plus à partir de ${first.year}.</strong> Cette année-là, il manque ${fmtMoney(missing)} pour payer ${dep}.`
+    : `${dep.replace(/^l/, "L")} sont financées chaque année jusqu'en ${last.year}.`;
   return `
     <p class="lede">${verdict} Sur ${rows.length} ans, le couple paie <strong>${fmtMoney(amt.totalTax)}</strong> d'impôt${amt.totalClawback > 1 ? ` et voit <strong>${fmtMoney(amt.totalClawback)}</strong> de PSV récupérés par l'impôt` : ""}. Il reste à la fin <strong>${fmtMoney(amt.afterTaxEstate)}</strong> après impôt.
     <span class="small">${esc(unitNote(s, last.year))} Le REER/FERR restant est imposé à ${Math.round((estateRates.estateTaxRate ?? 0.45) * 100)} % dans ce calcul.</span></p>
@@ -359,9 +367,9 @@ function planPanel(): string {
     ${legend(BALANCE_LEGEND)}
     ${balancesChart(s, rows, real)}
     <h2>D'où vient l'argent</h2>
-    ${legend(plan.rows.some((y) => y.spouses[0].propertyProceeds + y.spouses[1].propertyProceeds > 0) ? [...SOURCE_LEGEND, PROPERTY_LEGEND] : SOURCE_LEGEND, `<li><span class="sw line"></span>Dépenses visées et impôt</li>${first ? `<li><span class="sw s-short"></span>Manque de fonds</li>` : ""}`)}
+    ${legend(plan.rows.some((y) => y.spouses[0].propertyProceeds + y.spouses[1].propertyProceeds > 0) ? [...SOURCE_LEGEND, PROPERTY_LEGEND] : SOURCE_LEGEND, `<li><span class="sw line"></span>Dépenses (visées + supp.) et impôt</li>${first ? `<li><span class="sw s-short"></span>Manque de fonds</li>` : ""}`)}
     ${sourcesChart(s, rows, real)}
-    <p class="note">Quand les barres dépassent la ligne, l'excédent est réinvesti dans le CELI, puis dans le compte non enregistré.${first ? " Quand la ligne dépasse les barres, la zone rouge est le manque : des dépenses visées ne sont pas financées." : ""}</p>`;
+    <p class="note">Quand les barres dépassent la ligne, l'excédent est réinvesti dans le CELI, puis dans le compte non enregistré.${first ? " Quand la ligne dépasse les barres, la zone rouge est le manque : des dépenses ne sont pas financées." : ""}</p>`;
 }
 
 function detailPanel(): string {
