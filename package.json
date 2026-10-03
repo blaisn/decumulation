@@ -1,7 +1,7 @@
 {
   "name": "decumulation",
   "author": "Normand Blais",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Génère un plan de décaissement pour couple de retraités (Québec)",
   "scripts": {
