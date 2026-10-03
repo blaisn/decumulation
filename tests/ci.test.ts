@@ -150,3 +150,48 @@ describe("dépannage de la construction sous Windows", () => {
     expect(readFileSync("README.md", "utf8").includes("Cannot create symbolic link")).toBe(true);
   });
 });
+
+describe("icône de l'application : obligatoire pour le MSI (WiX LGHT0094 « Icon:…Icon.exe could not be found »)", () => {
+  const exists = existsSync("build/icon.ico");
+  const ico = exists ? readFileSync("build/icon.ico") : null;
+  const entries = () => {
+    const n = ico!.readUInt16LE(4);
+    return Array.from({ length: n }, (_, i) => {
+      const e = 6 + 16 * i;
+      return { w: ico!.readUInt8(e) || 256, h: ico!.readUInt8(e + 1) || 256, size: ico!.readUInt32LE(e + 8), offset: ico!.readUInt32LE(e + 12) };
+    });
+  };
+
+  it("build/icon.ico existe : electron-builder le trouve seul, et le MSI en a besoin", () => {
+    expect(exists).toBe(true);
+    expect(existsSync("build/icon.svg")).toBe(true);                 // sa source modifiable
+  });
+  it("c'est un vrai fichier ICO, avec des images de 16 à 256 pixels, toutes situées dans le fichier", () => {
+    expect([ico!.readUInt16LE(0), ico!.readUInt16LE(2)]).toEqual([0, 1]);
+    const list = entries();
+    const sizes = list.map((e) => e.w);
+    for (const s of [16, 32, 48, 256]) expect(sizes).toContain(s);
+    for (const e of list) {
+      expect(e.w).toBe(e.h);
+      expect(e.offset).toBeGreaterThanOrEqual(6 + 16 * list.length);
+      expect(e.offset + e.size).toBeLessThanOrEqual(ico!.length);
+    }
+  });
+  it(".gitignore n'exclut ni build/ ni les .ico : sinon la CI n'a pas l'icône", () => {
+    const rules = readFileSync(".gitignore", "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+    expect(rules.some((r) => /^\/?(\*\*\/)?build\/?(\*)?$/.test(r) || /\.ico$/.test(r))).toBe(false);
+  });
+  it(".gitattributes déclare les .ico binaires : aucune conversion de fin de ligne ne doit les altérer", () => {
+    expect(readFileSync(".gitattributes", "utf8").split("\n").map((l) => l.trim())).toContain("*.ico binary");
+  });
+  it("le dossier des ressources de construction reste « build » (valeur par défaut), et une icône déclarée existe", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { build: { directories?: { buildResources?: string }; win?: { icon?: string } } };
+    expect(pkg.build.directories?.buildResources ?? "build").toBe("build");
+    if (pkg.build.win?.icon) expect(existsSync(pkg.build.win.icon)).toBe(true);
+  });
+  it("le guide de publication explique l'erreur LGHT0094 et la solution", () => {
+    const doc = readFileSync("docs/PUBLICATION.md", "utf8");
+    for (const part of ["LGHT0094", "Icon:", "build/icon.ico", "256 × 256", "default Electron icon is used"]) expect(doc.includes(part)).toBe(true);
+    expect(doc.includes("sans gravité : `default Electron icon")).toBe(false);          // ne plus présenter l'absence d'icône comme anodine
+  });
+});
